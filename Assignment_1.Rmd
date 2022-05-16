@@ -1,0 +1,686 @@
+---
+title: Air Quality SARIMA
+date: "`r Sys.Date()`"
+authors:
+  - name: Helder
+    affiliation: Instituto Superior Tecnico
+    email: helder@mail.pt
+abstract: |
+  Air quality is very important in every day life. Better air quality is a major factor in life expectancy. In cities we need to control air quality and take measures if human health is in jeopardy.
+keywords:
+  - air quality
+  - timeseries
+  - SARIMA
+bibliography: references.bib
+biblio-style: unsrt
+output:
+  bookdown::pdf_book:
+    base_format: rticles::arxiv_article
+    fig_caption: true
+header-includes:
+  - \usepackage{float}
+  - \usepackage{amsmath}
+  - \usepackage{graphicx}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE,
+	include = FALSE,
+	cache = TRUE,
+	eval.after = "fig.cap"
+	#fig.pos = "!H"
+	#fig.env="figure"
+)
+
+options(knitr.table.format = "latex") # For kable tables to write LaTeX table directly
+```
+
+# Introduction {-}
+
+Here goes an introduction text
+
+```{r imports}
+library(tidyverse, quietly = TRUE)
+library(fpp3, quietly = TRUE)
+library(imputeTS)
+library(latex2exp)
+library(patchwork)
+```
+
+```{r loadData}
+qualityAR03 <- readxl::read_excel("./data/QualidadeARO3.xlsx") %>% 
+  ts(.,start=c(2020,1,1),frequency=24*366) %>% 
+  as_tsibble() %>% 
+  rename(Location = key, Ozone = value) %>% 
+  mutate(index = as_datetime(round_date(index, unit = "hour")))
+
+# %>%
+#    mutate(
+#     Location = recode(Location,
+#       "Australian Capital Territory" = "ACT",
+#       "New South Wales" = "NSW",
+#       "Northern Territory" = "NT",
+#       "Queensland" = "QLD",
+#       "South Australia" = "SA",
+#       "Tasmania" = "TAS",
+#       "Victoria" = "VIC",
+#       "Western Australia" = "WA"
+#     )
+# from 01/01/2020 to 31/12/2020, hourly.
+```
+
+1st step:
+-  analyzing the data.
+-  plotting
+-  missing data
+  - The data used in this study did not have missing values.
+  - Metering data have missing data and was preprocessed with imputation.
+
+# SARIMA
+
+The $SARIMA (p, d, q) \times (P, D, Q)_S$ model e a parametric approach for modeling a timeseries. It is defined by eq \ref{eqn:sarima}. This model takes into account several general properties of timeseries. First deals with nonstationarity by aplying differencing operations iether at seasonal componentes (D parameter) and/or at the regular componentes (d parameter). The resulting stationaty timeseries is then decomposed in autoregressive (p and P parameters) and movingaverage components (q and Q parameters). 
+
+\begin{equation}
+    X_t = \nabla^d \nabla_S^D Y_t \equiv (1-B)^d (1-B^S)^D Y_t\\
+    \Psi(B)\Phi_P(B^S)X_t = \theta(B)\Theta_Q(B^S)Z_t
+  \label{eqn:sarima}
+\end{equation}
+
+The difference operation is $\nabla Y_t = Y_t - Y_{t-1}$. A seasonal difference is the difference between an observation and the previous observation from the same season. So \[ \nabla_S^{D=1} y_t = y_t - y_{t-s}, \] where \(s=\) the number of seasons. (wrong).
+
+* $X_t$ - is a causal ARMA process.
+* $\nabla^d Y_t$ - is a difference operation, of order $d$ and/or $D$ for seasonal component
+* $\Psi(B)$ - an auto regressive polynomial of order $p$
+* $\Phi(B)$ - an auto regressive polynomial of order $P$, for the seasonal component
+* $\theta(B)$ - an moving average polynomial of order $q$
+* $\Theta(B)$ - an moving average polynomial of order $Q$, for the seasonal component
+* $Z_t$ - is White Noise, uncorrelated Gaussian random variables ($\sim \mathcal{N}(0,\sigma^{2})$)
+
+This model can have any combination of the parameters applied to the regular (p, d, q) and seasonal (P, D, Q) compoentens.
+
+# Modeling Workflow {-}
+
+It is quite difficult to manually select a model order that will perform well at forecasting a dataset. Here we will follow a modeling workflow to find the best model for forecasting building on timeseries mathematical and statistical properties. This workflow was followed to all the locations but only the details for the Restelo location will be presented. Forecast and model diagnostics for all the locations are discussed in \ref{sec:results}.
+
+```{r ySelection}
+#library(forecast)
+y <- qualityAR03 %>% filter(Location=="Restelo")
+```
+
+## 1. Plot the series and search for possible outliers.
+
+As we can see in Figure \@ref(fig:gg1).
+
+```{r gg1, fig.cap = "Timeseries data", fig.env="figure*", include=TRUE}
+# qualityAR03 %>% filter( key == "Entrecampos", between(index,as_datetime("2020-01-23"), as_datetime("2020-01-27")))
+# span two columns
+# , fig.height = 3, fig.width = 5
+qualityAR03 %>% 
+      autoplot(Ozone) + 
+      facet_grid(Location ~ .) +
+      labs(x="", y=TeX("$O_3 (\\mu g/ m^3)$")) +
+      #labs(x="", y=TeX("$O_3 (\\mu g/ m^3)$"), title = "Ozone levels") +
+      guides(color=guide_legend(title="Locations")) +
+      theme(strip.text.y = element_blank())
+```
+
+There were missing values in sensors, namely in Entrecampos and Ilhavo. The missing values were imputed previously, by preprocessing. There are various imputing strategies for example keep last value, average over missing range, and kalman method.
+
+```{r HistBoxPlots, fig.cap="Boxplot and Histogram of Restelo Ozone concentration", fig.dim=c(7, 3),  include=TRUE}
+par(mfrow=c(1,2))
+hist(y$Ozone, breaks = 20, main = "", xlab = "Ozone")
+boxplot(y$Ozone)
+```
+
+The Box plot evicences several extreme values in the data, and also confirmed by the histogram with a skewed shape. We can say taht this type of extreme values are outliers but cannot conclude if they are bad data.
+
+```{r ori, fig.cap='Restelo original data', fig.env="figure", include=TRUE}
+y %>% gg_tsdisplay(Ozone, plot_type = "partial", lag_max = 200)
+```
+
+```{r DayOfWeekPlot, eval=FALSE}
+y %>% gg_season(Ozone, period = "week") +
+  theme(legend.position = "none") +
+  labs(x="Day of week")
+```
+
+```{r TimeOfDayPlot, eval=FALSE}
+y %>% gg_season(Ozone, period = "day") +
+  theme(legend.position = "none") +
+  labs(x = "Time of day")
+```
+
+## 2. Stabilize the variance by transforming the data (Box-Cox).
+
+If the data shows variation that increases or decreases with the level of the series, then a transformation can be useful. For example, a logarithmic transformation is often useful, corresponding to a proportional variance by magnitude. A common method is the Box-Cox transformations family that considers power transformations, including the logaritmic transformation defined in eq. \ref{eqn:boxcox}. 
+
+"This is used if we think the time series is not described by an additive decomposition. The Box Cox transform can convert the original time series into a new one which can be described by an additive decomposition."
+
+\begin{equation}\label{eqn:boxcox}
+  w_t  =
+    \begin{cases}
+      \log(y_t) & \text{if $\lambda=0$};  \\
+      (\text{sign}(y_t)|y_t|^\lambda-1)/\lambda & \text{otherwise}.
+    \end{cases}
+\end{equation}
+
+Using the Box Cox transformation, if we need to log the value of the ts, but there are zero values, the logarithm will be undefined. One useful way of dealing with this limitation is to transform the values adding a constant preventing zero values ($\log(Ozone + 1)$).
+ 
+```{r, eval=FALSE}
+y$Ozone %>% box_cox(lambda = 0.10) %>% var()
+y$Ozone %>% box_cox(lambda = 0.1) %>% var()
+y$Ozone %>% box_cox(lambda = 0.4) %>% var()
+y$Ozone %>% box_cox(lambda = 0.8) %>% var()
+y$Ozone %>% box_cox(lambda = 1) %>% var()
+```
+
+
+```{r BoxCoxPlot, fig.cap='Box-Cox Transformation', fig.env="figure", include=TRUE}
+#guerrero(y$Ozone, .period = 24)
+#BoxCox.lambda(y) # Close to 1, so do nothing
+lambda <- y %>%
+  features(Ozone, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+lambda = 0 # log transform
+
+y %>%
+  #gg_tsdisplay(box_cox(Ozone, lambda), plot_type = "partial", lag_max = 200) +
+  gg_tsdisplay(box_cox(Ozone + 1, lambda=lambda), plot_type = "partial", lag_max = 50) +
+  labs(y = "",
+       title = TeX(paste0(
+         "Box-Cox Transformation $\\lambda$ = ", 
+         round(lambda,2), ", $\\log(Ozone + 1)$")))
+```
+
+What if we consider a logaritmic transformation of the TS? The TS is not stationary and have a seasonal component of period 24 (maybe also an AR(3)_12).
+
+```{r, eval=FALSE}
+y_stl24_log <- y %>% model(stl = STL(box_cox(Ozone + 1, lambda) ~ season(period = 24) + season(period=12)))
+# y_stl247 %>% components() %>% autoplot()
+#p1 <- y_stl24_log %>% components() %>% ACF(remainder, lag_max = 200) %>% autoplot()
+#p2 <- y_stl24_log %>% components() %>% PACF(remainder, lag_max = 200) %>% autoplot()
+p1 <- y_stl24_log %>% components() %>% ACF(season_adjust, lag_max = 200) %>% autoplot()
+p2 <- y_stl24_log %>% components() %>% PACF(season_adjust, lag_max = 200) %>% autoplot()
+p1 + p2
+```
+
+## 3. Analyse the stationarity of the transformed series.
+
+::Theory
+
+In the Original data, we see in figure \@ref(fig:ori) that the ACF does not have a exponential decay, so we could be in presence of non stationarity.
+
+Another method to test stationary is to consider the Augmented Dickey-Fuller Test, which uses the following null and alternative hypotheses: $H_0$: The time series is non-stationary. In other words, it has some time-dependent structure and does not have constant variance over time. And the Alternative $H_A$: The time series is stationary.
+If the p-value from the test is less than some significance level (e.g. $\alpha = .05$), then we can reject the null hypothesis and conclude that the time series is stationary.
+
+By definition a sticky stationary TS have finite mean and variance (does not depend on t and can depend on the lag). The first moment does not depend on t, and the second moment can only depend on the lag.
+After stabilizing the variance we shall proceed with stabilize the mean, and obtaining a strictly stationary timeseries.
+
+
+```{r adfTest}
+t_adf_p <- tseries::adf.test(y$Ozone, k = 2)$p.value
+# $`r t_adf_p`$
+```
+
+The Augmented Dickey-Fuller Test results in ($`r t_adf_p`$), is lower/higher than the common 0.05 significance level, we can reject the null hypothesis and come to the conclusion that the time series is stationary.
+
+"
+One way to test whether a time series is stationary is to perform an augmented Dickey-Fuller test, which uses the following null and alternative hypotheses:
+
+$H_0$: The time series is non-stationary. In other words, it has some time-dependent structure and does not have constant variance over time.
+
+$H_A$: The time series is stationary.
+
+If the p-value from the test is less than some significance level (e.g. $\alpha = .05$), then we can reject the null hypothesis and conclude that the time series is stationary.
+"
+
+```{r, eval=FALSE}
+# y_stl24_log %>% components() %>% adf(season_adjust)
+```
+
+## 4. If the series is not stationary, then we use differencing.
+
+We can address stationarity by decomposing the serie and removing the trend, but also we can use differencing. The later have advantage over removing trend component that there is no need for estimating parameters and is very straitforward and apropriate when the trend component is linear. But, if we need to estimate the stationary process (a sort of average sample path), we should use decomposition. 
+
+If the time series is relatively short and only one type of seasonality is present, SARIMA can be used directly by applying differencing.
+In long timeseries, multiple seasonal patterns may arise, and differencing will not suffice. We need methods that handle complex or multiple seasonality. STL can deal with multiple seasonality.
+
+"If a series is grossly either under or over-differenced (i.e., if a whole order of differencing needs to 
+be added or cancelled), this is often signalled by a “unit root” in the estimated AR or MA 
+coefficients of the model. An AR(1) model is said to have a unit root if the estimated AR(1) 
+coefficient is almost exactly equal to 1, that is not significantly different from 1, in terms of the 
+coefficient's own standard error. When this happens, it means that the AR(1) term is precisely 
+mimicking a first difference, in which case you should remove the AR(1) term and add an order of 
+differencing instead. This is exactly what would happen if you fitted an AR(1) model to the 
+undifferenced UNITS series, as noted earlier. In a higher-order AR model, a unit root exists in the 
+AR part of the model if the sum of the AR coefficients is exactly equal to 1. In this case you should 
+reduce the order of the AR term by 1 and add an order of differencing."
+
+Instead, I am going to follow a "forward stepwise" approach, adding terms of one kind or the other as indicated by the appearance of the ACF and PACF plots.
+
+```{r DiffAcfPlots, fig.cap="Differenced Timeseries (d=1 D=1)", eval=FALSE}
+temp <- y %>% mutate(diff_r = difference(difference(Ozone, lag=24)))
+p1 <- temp %>% ACF(diff_r, lag_max = 200) %>% autoplot()
+p2 <- temp %>% PACF(diff_r, lag_max = 200) %>% autoplot()
+p1 + p2
+```
+
+* Unit root tests
+* Test unitroot_ndiffs from Feats the minimum number of differencing.
+
+## 5. Identify the seasonal model by analyzing the seasonal coefficients of the ACF and PACF
+
+:: Seasonality Theory
+:::: KPSS test
+:::: Periodogram
+
+The ACF have peaks at regular 24 lags, as in figure \@ref(fig:ori), corresponding of a seasonal component, that must be removed.
+
+Use a Periodogram to identify Seasonal Components?
+
+Applying decomposition with STL, we can inspect ACF and PACF to identify if there is any for of seasonality effect in the TS. ACF of the original TS indicates that there are seasonal pattern of 24 lag (daily period).
+
+```{r}
+# p1 <- y %>% ACF(Ozone) %>% autoplot()
+# p2 <- y %>% PACF(Ozone) %>% autoplot()
+# p1 + p2
+```
+
+Looking at ACF and PACF, by differentiating Season=24, for SARIMA((p,d=1,q), (P, D=1, Q), 24, in figure  \@ref(fig:DiffsAcfsPlots), we can see that there is a seasonal autoregressive component of order 1, so P=1.
+The model will be (????)
+
+```{r DiffsAcfsPlots, fig.cap="ACF and PACF, by differentiating season w/ and w/o regular differentiating", include=TRUE}
+
+p1 <- y %>% mutate(diff_S = difference(Ozone, lag=24)) %>% ACF(diff_S, lag_max = 200) %>% autoplot() + labs(title = "Seasonal (24) difference")
+p2 <- y %>% mutate(diff_S = difference(Ozone, lag=24)) %>% PACF(diff_S, lag_max = 200) %>% autoplot()
+
+p3 <- y %>% mutate(diff_SN = difference(difference(Ozone, lag=24))) %>% ACF(diff_SN, lag_max = 200) %>% autoplot() + labs(title = "Seasonal (24) plus\n non-seasonal differences")
+p4 <- y %>% mutate(diff_SN = difference(difference(Ozone, lag=24))) %>% PACF(diff_SN, lag_max = 200) %>% autoplot()
+
+#p5 <- y %>% mutate(dd_S = difference(difference(Ozone, lag=24), lag=24)) %>% ACF(dd_S, lag_max = 200) %>% autoplot() + labs(title = "2 diff lag 24")
+#p6 <- y %>% mutate(dd_S = difference(difference(Ozone, lag=24), lag=24)) %>% PACF(dd_S, lag_max = 200) %>% autoplot()
+
+(p1 + p2) / (p3 + p4) #/ (p5 + p6)
+```
+
+In figure \@ref(fig:DiffsAcfsPlots), spike in lag 24 of ACF and exponential decay in lags 24, 48, etc in PACF indicates that the seasonal component have a MA(1) form, leading to SARIMA((?, ?, ?), (0,1,1) [24]). It is important that if differencing is used, the differences are interpretable. It is justified to consider a regular difference because the ACF does not show exponential decay along the lags. Additionally if we test an additional seasonal differencing there is no improvement with faster decay. Over-differentiating leads to model complexity and increases the variance, therefore we should choose parsimonious differencing orders.
+
+## 6. Identify the regular component by exploring the ACF and PACF of the residuals of the seasonal model.
+
+Looking at ACF and PACF, of remainder, after removing Daily Season component by STL, and applying difference one and two times.
+
+```{r , fig.cap='1st and 2nd difference models after removing Daily Season component', include=TRUE}
+y_stl24 <- y %>% model(stl = STL(Ozone ~ trend() + season(period = 24)))
+p1 <- y_stl24 %>% components() %>% mutate(diff_r = difference(season_adjust)) %>% ACF(diff_r, lag_max = 200) %>% autoplot()
+p2 <- y_stl24 %>% components() %>% mutate(diff_r = difference(season_adjust)) %>% PACF(diff_r, lag_max = 200) %>% autoplot()
+
+p3 <- y_stl24 %>% components() %>% mutate(diff_r = difference(difference(season_adjust))) %>% ACF(diff_r, lag_max = 200) %>% autoplot()
+p4 <- y_stl24 %>% components() %>% mutate(diff_r = difference(difference(season_adjust))) %>% PACF(diff_r, lag_max = 200) %>% autoplot()
+
+(p1 + p2) / (p3 + p4)
+# %>% components() %>% gg_tsdisplay(remainder, plot_type = "partial")
+```
+
+The ACF of Second Differences suggest it is an Difference (2) MA(2) Period (24).
+(Difference (2) MA(2) Period (24))
+
+SARIMA((0,2,2),(0,2,4))[24] ?
+
+#### SARIMA
+
+Deciding with SARIMA((0,2,2),(0,2,0))[24]
+
+```{r fit}
+#p1 <- y %>% mutate(diff_r = difference(Ozone, lag=24)) %>% ACF(diff_r, lag_max = 200) %>% autoplot()
+#p2 <- y %>% mutate(diff_r = difference(Ozone, lag=24)) %>% PACF(diff_r, lag_max = 200) %>% autoplot()
+#p1 + p2
+fit <- y %>%
+  #model(arima = ARIMA(Ozone ~ pdq(0, 0, 0) + PDQ(0, 0, 0, period=24))) %>%
+  # model(arima = ARIMA(Ozone ~ pdq(1, 1, 0) + PDQ(0, 1, 1, period=24))) #%>%
+  model(arima = ARIMA(Ozone ~ pdq(2, 0, 2) + PDQ(2, 1, 0, period=24))) #%>%
+  # model(arima000011 = ARIMA(Ozone ~ pdq(0, 1, 0) + PDQ(0, 1, 1, period=24)),
+  #       arima010011 = ARIMA(Ozone ~ pdq(1, 1, 0) + PDQ(0, 1, 1, period=24)),
+  #       arima010011 = ARIMA(Ozone ~ pdq(0, 1, 1) + PDQ(0, 1, 1, period=24)),
+  #       arima101110 = ARIMA(Ozone ~ pdq(1, 0, 1) + PDQ(1, 1, 0, period=24)),
+  #       arima101011 = ARIMA(Ozone ~ pdq(1, 0, 1) + PDQ(0, 1, 1, period=24)),
+  #       arima202210 = ARIMA(Ozone ~ pdq(2, 0, 2) + PDQ(2, 1, 0, period=24)))
+  #gg_tsdisplay(plot_type = "partial", lag_max = 100)
+
+#fit %>% gg_tsresiduals(lag_max = 50)
+#fit %>% augment() %>%  features(.resid, ljung_box)
+```
+```{r fitACFsPlot, fig.cap=paste("SARIMA",fit$arima[[1]]$model$formula[3]), fig.dim=c(7, 3), include=TRUE}
+p1 <- fit %>% augment() %>% ACF(.resid, lag_max = 200) %>% autoplot()
+p2 <- fit %>% augment() %>% PACF(.resid, lag_max = 200) %>% autoplot()
+p1 + p2
+```
+
+```{r, eval=FALSE}
+y_stl24_2d_arima <- y %>% 
+  model(stlf = decomposition_model(
+    STL(log(Ozone+1) ~ season(period = 24) + season(period=12)),
+    #ARIMA(season_adjust ~ pdq(0,0,3) + PDQ(2, 0, 0, period=24) )
+    ARIMA(season_adjust ~ pdq(0,0,3) + PDQ(2, 0, 0, period=24) )
+  ))
+
+y_stl24_2d_arima %>% augment() %>% gg_tsdisplay(.innov, plot_type = "partial", lag_max = 100)
+```
+
+#### SARIMA autoselection
+
+Series: Ozone 
+Model: ARIMA(2,0,2)(2,1,0)[24] 
+
+Coefficients:
+         ar1     ar2     ma1     ma2     sar1     sar2
+      0.1259  0.6729  0.9573  0.1476  -0.6270  -0.3213
+s.e.  0.5169  0.4578  0.5170  0.1017   0.0102   0.0102
+
+sigma^2 estimated as 61.11:  log likelihood=-30447.16
+AIC=60908.32   AICc=60908.33   BIC=60957.87
+
+======================================
+Series: remainder 
+Model: ARIMA(3,0,1)(2,0,0)[24] 
+
+Coefficients:
+         ar1      ar2     ar3      ma1     sar1     sar2
+      1.8547  -1.0405  0.1699  -0.7828  -0.2941  -0.2925
+s.e.     NaN      NaN  0.0011   0.0063      NaN      NaN
+
+sigma^2 estimated as 26.47:  log likelihood=-26853.38
+AIC=53720.75   AICc=53720.77   BIC=53770.32
+
+======================================
+Series: Ozone 
+Model: STL decomposition model 
+Combination: season_adjust + season_24
+Series: season_adjust 
+Model: ARIMA(1,1,3)(2,0,0)[24] 
+
+Coefficients:
+         ar1      ma1      ma2      ma3     sar1     sar2
+      0.8043  -0.7023  -0.1831  -0.0227  -0.2864  -0.2849
+s.e.  0.0195   0.0221   0.0131   0.0131   0.0104   0.0103
+
+sigma^2 estimated as 32.1:  log likelihood=-27695.17
+AIC=55404.33   AICc=55404.34   BIC=55453.9
+
+## 7. Check the significance of the coefficients
+
+Coefficients
+
+```{r coef, include=TRUE}
+knitr::kable(fit %>% coef(), format = "latex", caption = "Model coefficient statistics")
+```
+
+Glance
+
+```{r glance, include=TRUE}
+knitr::kable(fit %>% glance(), format = "latex", caption = "Model glance")
+```
+
+#### Other
+
+There is none weekly seasonal component. As proved by defining a STL decomposition with 2 season components (day and week) with no change seen in the ACF/PACF plots.
+
+(eval=False)
+
+```{r , fig.cap='Remove Daily and Weekly Season components', eval=FALSE}
+#y_stl247 <- y %>% model(stl = STL(value ~ season(period = 24) + season(period = 7*24)))
+y_stl247 <- y %>% model(stl = STL(Ozone))
+
+p1 <- y_stl247 %>% components() %>% mutate(diff_r = difference(remainder)) %>% ACF(diff_r, lag_max = 200) %>% autoplot()
+p2 <- y_stl247 %>% components() %>% mutate(diff_r = difference(remainder)) %>% PACF(diff_r, lag_max = 200) %>% autoplot()
+
+p3 <- y_stl247 %>% components() %>% mutate(diff_r = difference(difference(remainder))) %>% ACF(diff_r, lag_max = 200) %>% autoplot()
+p4 <- y_stl247 %>% components() %>% mutate(diff_r = difference(difference(remainder))) %>% PACF(diff_r, lag_max = 200) %>% autoplot()
+
+(p1 + p2) / (p3 + p4)
+# %>% components() %>% gg_tsdisplay(remainder, plot_type = "partial")
+```
+
+
+```{r eval=FALSE, include=FALSE}
+gg_tsdisplay(y, y=Ozone, plot_type="partial") # Seasonal differencing is mandatory
+# ggtsdisplay(y,lag=200)# Let's do a zoom
+
+# STL decomposition
+#y %>% model(stl = STL(value)) %>% components() %>% select(season_adjust) %>% gg_tsdisplay(season_adjust, plot_type = "partial")
+y %>% model(stl = STL(Ozone)) %>% components() %>% 
+  mutate(diff_remainder = difference(remainder)) %>%
+  gg_tsdisplay(diff_remainder, plot_type = "partial")
+
+y %>% model(stl = STL(Ozone)) %>% components() %>% 
+  mutate(diff_remainder = difference(remainder)) %>%
+  gg_tsdisplay(diff_remainder, plot_type = "partial")
+
+y %>% model(stl = STL(Ozone ~ season(period = 24) + season(period = 24*7) )) %>% 
+  components() %>% 
+  gg_tsdisplay(remainder, plot_type = "partial")
+```
+
+Forecast with STL, notes:
+Note that the prediction intervals ignore the uncertainty associated with the seasonal component. They are computed using the prediction intervals from the seasonally adjusted series, which are then reseasonalized using the last year of the seasonal component. The uncertainty in the seasonal component is ignored.
+
+```{r auto_arima, eval=FALSE}
+# STL
+# Default trend window = nextodd(ceiling((1.5*period)/(1-(1.5/s.window)))
+#y_arima_auto <- y %>% model(arima = ARIMA(Ozone))
+#y_arima_auto %>% report()
+
+#y_arima_auto <- y %>% model(stl = STL(Ozone)) %>% components() %>% select(-.model) %>% model(arima = ARIMA(remainder))
+#y_arima_auto %>% report()
+
+y_arima_auto <- y %>% model(stlf = decomposition_model(
+    STL(log(Ozone+1) ~ season(period = 24) + season(period = 12)),
+    ARIMA(season_adjust)
+  ))
+
+y_arima_auto %>% report()
+y_arima_auto %>% gg_tsresiduals(lag_max = 50)
+
+y_arima_auto
+```
+
+
+```{r test_stl_arima, eval=FALSE}
+# Series: Ozone 
+# Model: STL decomposition model 
+# Combination: season_adjust + season_24
+# Series: season_adjust 
+# Model: ARIMA(1,1,3)(2,0,0)[24] 
+
+y_stl_arima <- y %>% model(stlf = decomposition_model(
+    STL(Ozone),
+    ARIMA(season_adjust ~ pdq(1,1,3) + PDQ(2, 0, 0, period=24))
+  ))
+
+y_stl_arima %>% report()
+y_stl_arima %>% augment() %>% features(.innov, ljung_box)
+
+#qqnorm(y_stl_arima %>% augment() %>% .$.resid)
+qqnorm(y_stl_arima %>% augment() %>% .$.innov)
+
+```
+
+## 8. Analyze the residuals
+
+The Ljung-Box test tests the randomness of a series; a p-value under 0.05 rejects the null hypothesis of white noise.
+
+```{r ljungBoxTest, include=TRUE}
+# y_stl24 %>% components() %>% features(remainder, ljung_box)
+dof <- 7 #<ARIMA(2,0,2)(2,1,0)[24]>
+fit %>% augment() %>%
+  features(.resid, ljung_box, lag=50, dof = dof)
+```
+
+Also we can inspect if the residuals are normal distributed, thu the QQPlot, so that we can assert that the ramainder of the model is in fact gaussian white noise (see figure \@ref(fig:residQQPlot)).
+
+```{r residQQPlot, fig.cap="Residuals QQPlot", fig.dim = c(3, 3), include=TRUE, warning=FALSE}
+# y_stl24 %>% components() %>% ggplot() + 
+#   geom_histogram(aes(x = remainder), bins = 30) +
+#   # ggtitle("Histogram of residuals") + 
+#   xlab("Residuals") + ylab("Frequency") +
+#   theme_bw() +
+#   theme(plot.title = element_text(hjust = 0.5),
+#         legend.position = "bottom")
+qqnorm(fit %>% augment() %>% .$.resid)
+```
+
+## 9. Compare different models using AIC or SBC (M=p+q+P+Q):
+
+Goodness of fit - "The goodness-of-fit of is a measure of the quality of the model, that takes into account the discrepancies between the values observed and those predicted."
+
+```{r accuracy, eval=FALSE}
+# this can be applyed to different 
+fit %>%
+  accuracy() %>%
+  arrange(Location, MASE)
+```
+
+
+```{r, eval=FALSE}
+fit_accuracy <- accuracy(fit, measures = lst(MASE)) %>% 
+  pivot_wider(names_from = .model, values_from = MASE) %>% 
+  select(-.type)
+fit_accuracy
+
+best_fit <- fit %>% 
+  transmute(
+    State, # Need to keep key variables for a valid mable
+    best_fit = if_else(fit_accuracy$ets < fit_accuracy$arima, ets, arima)
+  )
+best_fit
+
+# inputs     <- list(g, g2)
+# outputs    <- sapply(inputs, mp)
+# best.input <- inputs[which.max(outputs)]
+
+```
+
+### Forecast SARIMA
+
+With the model defined we can proceed to forecasting.
+Forecasting can be done by sampling the model.
+It is done by sampling the model and obtaining point estimates for each lag, the forecast value will be the average of the point estimates.
+
+```{r forecastLevel, include=TRUE}
+knitr::kable(fit %>% forecast(h=5) %>% hilo(level = c(95)), caption = "Forecast 5 time periods ahead (95\\% CI)")
+```
+
+```{r fcplot, fig.cap="Forecast", fig.dim=c(7, 2), include=TRUE}
+fit %>%
+  forecast(h=5) %>%
+  autoplot(y %>% filter(between(index,as_datetime("2020-12-28"), as_datetime("2021-01-01"))))
+```
+
+
+```{r eval=FALSE, include=FALSE}
+
+y.sdiff <- diff(y$value, lag = 12, differences = 1)
+gg_tsdisplay(y.sdiff, ff)# Requires regular differencing
+
+y.rdiff <- diff(y, lag = 1, differences = 1)
+gg_tsdisplay(y.rdiff,lag=200) # Requires seasonal differencing
+# Do both
+y.rdiff.sdiff <- diff(y.rdiff, lag = 12, differences = 1) 
+gg_tsdisplay(y.rdiff.sdiff) # Sweet!
+
+### Part II
+
+# Fitting
+## Report 
+# y %>% model(arima = ARIMA(value ~ 0 + pdq(1, 1, 0) + PDQ(0, 1, 0, period= "1 day"))) %>% report()
+
+#arima.fit <- y %>% model(arima = ARIMA(season_adjust ~ 1 + pdq(1, 0, 1) + PDQ(0, 1, 0, period= "1 day")))
+arima.fit <- y %>% model(arima = ARIMA(season_adjust ~ 1 + pdq(1, 0, 1)))
+arima.fit %>% report()
+
+fc <- arima.fit %>%
+  forecast(h = 5)
+
+fc %>%
+  autoplot(y, level = NULL) +
+  ggtitle("Forecasts Ozone") +
+  xlab("Year") +
+  guides(colour = guide_legend(title = "Forecast"))
+
+
+gg_tsdisplay(arima.fit$residuals)
+gg_tsdisplay(arima.fit$residuals, lag=13)
+
+arima.fit2 <- arima(y, order=c(0,1,1),
+                   seasonal = list(order=c(0,1,1),period=12),
+                   lambda = NULL, 
+                   include.constant = TRUE)
+gg_tsdisplay(arima.fit2$residuals)
+gg_tsdisplay(arima.fit2$residuals, lag=80)
+autoplot(arima.fit)
+autoplot(arima.fit2)
+summary(arima.fit)
+summary(arima.fit2)
+
+library(lmtest)
+coeftest(arima.fit)
+coeftest(arima.fit2)
+
+autoplot(y) +
+  autolayer(arima.fit2$fitted,series="Fit")
+
+#library(ggplot2)
+df <- data.frame(y=y,x=arima.fit2$fitted)
+ggplot(df,aes(x=x,y=y)) + geom_point() + 
+  geom_smooth(method='lm',formula=y~x)
+```
+
+# Results & Discussion {-}
+\label{sec:results}
+
+See Section \ref{sec:results}.
+
+In \cite{hadash2018estimate} we have a citation.
+
+# Conclusions {-}
+
+# Methods {-}
+
+## Model Selection {-}
+
+* Akaike’s Information Criterion
+
+\begin{equation}
+    \text{AIC} = -2 \log(L) + 2k
+  \label{eqn:AIC}
+\end{equation}
+
+* Corrected AIC
+
+\begin{equation}
+  \text{AIC}_{\text{c}} = \text{AIC} + \frac{2k(k+1)}{T-k-1}
+  \label{eqn:AICc}
+\end{equation}
+
+* Bayesian Information Criterion
+
+\begin{equation}
+  \text{BIC} = \text{AIC} + k[\log(T)-2]
+  \label{eqn:BIC}
+\end{equation}
+
+where $L$ is the likelihood of the model and $k$ is the total number of parameters.
+
+## Notes {-}
+
+[SARIMA Identification Models in R - Mario Castro](https://www.youtube.com/watch?v=VTE7uqjNj04)
+
+[github - Mario Castro](https://github.com/mariocastro73/ML2020-2021/blob/master/scripts/SARIMA-identification-demo.R)
+
+# Appendix: All code for this report {-}
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, include=TRUE, eval=FALSE}
+```
