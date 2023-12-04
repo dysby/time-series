@@ -1,0 +1,156 @@
+---
+title: "A2-NOS"
+author: "helder"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+## NOS {-}
+
+Once more the sample ACF and PACF of the log returns and squared log returns, in figure \@ref(fig:nos-acf-pacf), have no significant correlations. ARCH-LM test in table \@ref(tab:nos-arch-test) does not support evidence of ARCH effect, p-values would be small. The Ljung-Box test, in table \@ref(tab:nos-ljung-box-test) can be considered to support that there are non significant autocorrelations. 
+
+After estimating a candidate set of models, the goodness of fit (gof) summary table \@ref(tab:nos-fits) show the models with t-distribution have better measures. The best model is the IGARCH(1,1) with t-distribution. 
+
+The model coefficients are resumed in the table \@ref(tab:nos-model-coef-tab). The mean (mu) and omega are estimated zero. All remaining coefficient is significant. In fact, the Persistence of the GARCH(1, 1) model as $P = a_1+b_1 < 1$, is almost 1 so there is a case for a IGARCH process. But no evidence of non-stationary data was seen in the ACF plots, as stated before.
+
+The standardized residuals plots in figure \@ref(fig:nos-residual-plots) confirm the appropriate choice of t-distribution, with almost non deviations, apart from 1 outlier.
+The Ljung–Box and The LM Arch tests, all lead to conclude no correlation and no ARCH effect in the residuals. The Jarque-Bera test also conclude the residuals are normally distributed.
+
+The model IGARCH(1, 1) with t-distribution, passed all diagnostic checks and was used to forecast the volatility, as figure \@ref(fig:nos-forecast-plots). Noting here the persistence (almost 1) is very well expressed, the foretasted values stay the same along the forecast periods.
+
+```{r}
+NAME <- "NOS"
+s <- log_returnNOS
+```
+
+```{r nos-acf-pacf, fig.pos="!h", out.extra = "", fig.cap=paste(NAME, "Log Returns"), fig.dim=c(6, 4), include=TRUE}
+p1 <- as_tsibble(s) %>% ACF() %>% autoplot() + ylim(c(-0.10, 1)) + ggtitle("log returns")
+p2 <- as_tsibble(s) %>% PACF() %>% autoplot() + ylim(c(-0.10, 1))
+p3 <- as_tsibble(s^2) %>% ACF() %>% autoplot() + ylim(c(-0.10, 1)) + ggtitle("log returns ^2")
+p4 <- as_tsibble(s^2) %>% PACF() %>% autoplot() + ylim(c(-0.10, 1))
+(p1 + p2) / (p3 + p4)
+```
+
+```{r nos-arch-test}
+kbl(do_arch_test(s),
+      caption = paste(NAME, "- ARCH LM test"),
+      booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+```{r nos-ljung-box-test}
+kbl(tidy(Box.test(coredata(s^2), type="Ljung-Box", lag = 12)),
+      caption = paste(NAME, "- Ljung-Box test"),
+      booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+
+```{r nos-fits, include=TRUE}
+arma.order <- c(0,0)
+
+arch.order <-  1:2
+arch.names <-  paste("arch", arch.order, sep="")
+fit.list <-  list()
+for (p in arch.order) {
+  arch.spec <-  ugarchspec(variance.model = list(garchOrder=c(p,0)),
+                          mean.model = list(armaOrder=arma.order))
+  fit.list[[p]] <- ugarchfit(spec=arch.spec, data=s)
+}
+names(fit.list) <-  arch.names
+
+garch11.spec <-  ugarchspec(variance.model=list(garchOrder=c(1,1)),
+                          mean.model = list(armaOrder=arma.order))
+fit.list$garch11 <- ugarchfit(spec=garch11.spec, data=s)
+
+garch11_std.spec <-  ugarchspec(variance.model=list(garchOrder=c(1,1)),
+                          mean.model = list(armaOrder=arma.order), distribution.model="std")
+fit.list$garch11_std <- ugarchfit(spec=garch11_std.spec, data=s)
+
+garch22_std.spec <-  ugarchspec(variance.model=list(garchOrder=c(2,2)),
+                              mean.model = list(armaOrder=arma.order), distribution.model="std")
+
+fit.list$garch22_std <- ugarchfit(spec=garch22_std.spec, data=s)
+
+igarch11_std.spec <-  ugarchspec(variance.model=list(model="iGARCH", garchOrder=c(1,1)),
+                             mean.model = list(armaOrder=arma.order, include.mean=TRUE),
+                             distribution.model="std")
+
+fit.list$igarch11_std <- ugarchfit(spec=igarch11_std.spec, data=s)
+
+garch_m_11_std.spec  <-  ugarchspec(variance.model = list(model="sGARCH", garchOrder=c(1,1)),
+                                mean.model = list(armaOrder=arma.order, 
+                                                  include.mean=TRUE, archm=TRUE, archpow = 2),
+                                distribution.model="std")
+fit.list$garch_m_11_std <- ugarchfit(spec=garch_m_11_std.spec, data=s)
+
+aparch11_std.spec = ugarchspec(variance.model = list(model="apARCH", garchOrder=c(1,1)),
+                                mean.model = list(armaOrder=arma.order, include.mean=TRUE),
+                                distribution.model="std")
+
+fit.list$aparch11_std <- ugarchfit(spec=aparch11_std.spec, data=s)
+info.mat <- sapply(fit.list, infocriteria)
+rownames(info.mat) <-  rownames(infocriteria(fit.list[[1]]))
+
+kbl(info.mat[1:2,],
+      caption = paste(NAME, "- Models goodness of fit (AIC; BIC)"),
+      booktabs = T) %>%
+  kable_styling(latex_options = c("hold_position","scale_down"))
+```
+
+```{r nos-model-coef-tab}
+#arch.list$arch1@fit$matcoef
+#arch.list$garch11@fit$matcoef
+kbl(round(fit.list$igarch11_std@fit$matcoef, 4),
+      caption = paste(NAME, "IGARCH - Model coefficients"),
+      booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+
+```{r, eval=FALSE}
+show(fit.list$igarch11_std)
+```
+
+Model diagnostics:
+\singlespacing
+\begin{verbatim}
+GARCH Model : iGARCH(1,1)   Mean Model : ARFIMA(0,0,0)    Distribution : std
+Weighted Ljung-Box Test on Standardized Residuals
+                        statistic p-value
+Lag[1]                     0.2290  0.6322
+Lag[2*(p+q)+(p+q)-1][2]    0.8487  0.5500
+Lag[4*(p+q)+(p+q)-1][5]    4.7010  0.1787
+d.o.f=0       H0 : No serial correlation
+Weighted Ljung-Box Test on Standardized Squared Residuals
+                        statistic p-value
+Lag[1]                     0.1750  0.6757
+Lag[2*(p+q)+(p+q)-1][5]    0.7529  0.9126
+Lag[4*(p+q)+(p+q)-1][9]    1.5807  0.9487
+d.o.f=2
+Weighted ARCH LM Tests
+            Statistic Shape Scale P-Value
+ARCH Lag[3]    0.6605 0.500 2.000  0.4164
+ARCH Lag[5]    0.9332 1.440 1.667  0.7529
+ARCH Lag[7]    0.9913 2.315 1.543  0.9150
+```{r , results='asis'}
+jb <- rugarch::BerkowitzTest(residuals(fit.list$igarch11_std, standardize=TRUE))[10:11]
+print(paste("Jarque-Bera Test of Normality Statistic:", round(jb$JB, 4), " p-value =", round(jb$JBp, 4) ))
+```
+\end{verbatim}
+\onehalfspacing
+
+```{r nos-residual-plots, fig.pos="!h", out.extra = "", fig.cap=paste(NAME, "IGARCH Model Standardized Residuals"), fig.dim=c(6, 3), include=TRUE}
+par(mfrow = c(1, 2))
+plot(fit.list$igarch11_std, which=8) #8:   Empirical Density of Standardized Residuals
+plot(fit.list$igarch11_std, which=9) #9:   QQ-Plot of Standardized Residuals
+```
+
+
+```{r nos-forecast-plots, fig.pos="!h", out.extra = "", fig.cap=paste(NAME, "IGARCH Model Forecasts"), fig.dim=c(6, 3), include=TRUE}
+par(mfrow = c(1, 2))
+garchforecast1 <- ugarchforecast(fit.list$igarch11_std, data=s, n.ahead = 5)
+plot(garchforecast1, which=1) #1:   Time Series Prediction (unconditional)
+plot(garchforecast1, which=3) #3:   Sigma Prediction (unconditional)
+```
+

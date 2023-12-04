@@ -1,0 +1,221 @@
+---
+title: "A1-ModelingWorkflow"
+author: "helder"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+# Methods {-}
+
+This section will provide a closer look at each of the Box Jenkins methodology stages, and say more about the methodology being applied for SARIMA models estimation to series of ground level Ozone concentrations in 10 Portuguese Locations. Forecast and model diagnostics for all the locations are discussed in \ref{sec:results}.
+
+There are important features to check when first looking at the time series: if there is a trend, that on average the values tend to increase or decrease along the time; if there is seasonality, in a form or repeating pattern (highs and lows) along periodic time frames (daily, weekly, monthly, or others); if there are errors in data collection; is there a constant variance over time; if there are abrupt changes in the mean/level or the variance of the series.
+
+### Timeseries plots {-}
+
+```{r ySelection}
+#library(forecast)
+y <- qualityAR03 %>% filter(Location=="Restelo")
+```
+
+As we can see in figure \@ref(fig:gg1), there were missing values in the series, namely in Entrecampos and Ilhavo. The missing values were imputed by preprocessing (previously). There are several imputing strategies for example keep last value, average over missing range and interpolation.
+
+The example box plot in figure \@ref(fig:HistBoxPlots), for Restelo location, shows extreme values in the data, that is and also confirmed by the histogram with a skewed shape. One can say that this type of extreme values are outliers but cannot conclude if they are bad data, or just natural occurring values.
+
+```{r gg1, fig.cap = "Timeseries data", fig.env="figure*", include=TRUE}
+# qualityAR03 %>% filter( key == "Entrecampos", between(index,as_datetime("2020-01-23"), as_datetime("2020-01-27")))
+# span two columns
+# , fig.height = 3, fig.width = 5
+qualityAR03 %>% 
+      autoplot(Ozone) + 
+      facet_grid(Location ~ .) +
+      labs(x="", y=TeX("$O_3 (\\mu g/ m^3)$")) +
+      #labs(x="", y=TeX("$O_3 (\\mu g/ m^3)$"), title = "Ozone levels") +
+      guides(color=guide_legend(title="Locations")) +
+      theme(strip.text.y = element_blank())
+```
+
+```{r HistBoxPlots, fig.cap="Boxplot and Histogram", fig.dim=c(7, 3),  include=TRUE}
+par(mfrow=c(1,2))
+hist(y$Ozone, breaks = 20, main = "", xlab = "Ozone")
+boxplot(y$Ozone)
+```
+
+```{r ori, fig.cap=paste(y$Location[1], "- original"), fig.env="figure", include=FALSE}
+y %>% gg_tsdisplay(Ozone, plot_type = "partial", lag_max = 200)
+```
+
+```{r DayOfWeekPlot, eval=FALSE}
+y %>% gg_season(Ozone, period = "week") +
+  theme(legend.position = "none") +
+  labs(x="Day of week")
+```
+
+```{r TimeOfDayPlot, eval=FALSE}
+y %>% gg_season(Ozone, period = "day") +
+  theme(legend.position = "none") +
+  labs(x = "Time of day")
+```
+
+### Stabilize the variance {-}
+
+If the data shows variation that increases or decreases with the level of the series, then a transformation can be useful. For example, a logarithmic transformation is often useful, corresponding to a proportional variance by magnitude. A common method is the Box-Cox transformations family that considers power transformations, including the logarithmic transformation defined in equation \ref{eqn:boxcox}.
+
+\begin{equation}\label{eqn:boxcox}
+  w_t  =
+    \begin{cases}
+      \log(y_t) & \text{if $\lambda=0$};  \\
+      (\text{sign}(y_t)|y_t|^\lambda-1)/\lambda & \text{otherwise}.
+    \end{cases}
+\end{equation}
+
+It does not only stabilize the variance but also improves the approximation of a Normal distribution. In some practical cases, if we want to use the log the value of the series, but there are zeros, the logarithm will be undefined. One useful way of dealing with this limitation is to transform the values adding a constant preventing zero values ($\log(Ozone + 1)$).
+
+The Box-Cox transformation lambda parameter can be estimated using the numerical methods [@fpp3], or testing some values within the range and select by visual inspection the transformed series that looks to have more constant variance. The Ozone data does not have to be transformed by logarithm.
+
+What if we consider a logarithmic transformation of the series? The TS is not stationary and have a seasonal component of period 24 (maybe also an AR(3)_12).
+
+```{r calcLambda, include=TRUE}
+qualityAR03 <- qualityAR03 %>% left_join(qualityAR03 %>% features(Ozone, features = guerrero))
+```
+
+
+```{r BoxCoxPlot, fig.cap=paste(y$Location[1], " - Box-Cox Transformation"), fig.env="figure", include=TRUE, eval=FALSE}
+lambda <- y %>%
+  features(Ozone, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#If close to 1, so do nothing
+#lambda = 0 # log transform
+
+y %>%
+  gg_tsdisplay(box_cox(Ozone, lambda), plot_type = "partial", lag_max = 200) +
+  #gg_tsdisplay(box_cox(Ozone + 1, lambda=lambda), plot_type = "partial", lag_max = 50) +
+  labs(y = "",
+       title = TeX(paste0(
+         "Box-Cox Transformation $\\lambda$ = ", 
+         #round(lambda,2), ", $\\log(Ozone + 1)$")))
+         round(lambda,2))))
+```
+
+
+### Stationarity {-}
+
+After stabilizing the variance we follow with stabilizing the mean, and obtaining a strictly stationary series. Stationarity is a very important feature because autoregressive forecasting models are linear models that utilize the lag(s) of the series itself as predictors. By definition a strictly stationary series have contant mean (does not depend on t) and the variance is finite.
+
+If the samples ACF or PACF does not have a exponential decay we could be in presence of non stationarity. We can address this issue by decomposing the series and removing the trend, but also we can use differencing, motivating the use of SARIMA models. The later have advantage over removing trend component that there is no need for estimating parameters and is very straightforward. If the series is relatively short and only one type of seasonality is present, SARIMA can be used directly by applying differencing. In long series multiple seasonal patterns may arise, and differencing may will not suffice. In that case we may need methods that handle complex or multiple seasonality, such as a composition model STL that can deal with multiple seasonality, and on top of that model the de-seasoned remainder with (S)ARIMA class models.
+
+Also, if the series have a very evident need for differencing is often signaled by a "unit root" in the estimated AR or MA coefficients of the model, the Dickey-Fuller test and KPSS test explore this trait (and this two tests complement one another).
+
+Hypothesis testing is done by formulating a Null Hypothesis and an Alternative. Then, look for statistical evidence in the data, subject to the null model, to the rejects the null hypothesis. With the appropriate test statistics we reject the null hypothesis if the test statistics is above a threshold corresponding to a significance level. The significance level $\alpha$ (usually 0.5 or 0.01), is the probability of rejecting the null hypothesis when it is true.
+The p-value is the probability of observing the sample data, assuming that the null hypothesis is true. Usualy the p-value is computed in favor of the threshold and the conclusions are drawn based on the p-value (small p-values, less than $\alpha$ lead to rejecting the null).
+
+The Dickey-Fuller Test uses the following null and alternative hypotheses: $H_0$: The time series is non-stationary in the mean. In other words, it has some time-dependent structure. And the Alternative $H_1$: The time series is stationary. If the p-value is less than some significance level (e.g. $\alpha = .05$), then we can reject the null hypothesis and conclude that the time series is stationary (in the mean).
+
+The KPSS unit root test formulate that the null hypothesis $H_0$: the series is stationary, and the Alternative $H_1$: the series have an unit_root. High values of p-value will lead to conclude that there is no evidence to reject the null hypothesis (therefore the series is stationary).
+
+The Augmented Dickey-Fuller and KPSS tests results in table \ref{tab:statiorarytests} and table \ref{tab:statiorarytestsD24}, have contraditory conclusions regarding the original series, later it will clarified that the original series are not stationary. The tests applied to a differenced series lead to conclusion of stationarity. In hypotesis testing the number of observation influece the power of the test, and atiplical observations can led to easy rejecting of null hypotesis.
+
+```{r statiorarytests, include=TRUE}
+adf <- function(x, ...) {
+    out <- tseries::adf.test(x, k = 1)
+    c(adf_stat = unname(out$statistic), adf_pvalue = out$p.value)
+}
+
+qualityAR03 %>%
+  mutate(Ozone = box_cox(Ozone, lambda_guerrero)) %>%
+  features(Ozone, list(unitroot_kpss, adf, unitroot_ndiffs, ~ unitroot_nsdiffs(., .period = 24))) %>%
+  knitr::kable(format = "latex", caption = "Unitroot test statistics (w transformed BoxCox(Ozone))", booktabs = T) 
+```
+
+```{r statiorarytestsD24, include=TRUE}
+qualityAR03 %>%
+  group_by(Location) %>%
+  mutate(Ozone = difference(box_cox(Ozone, lambda_guerrero), lag = 24)) %>%
+  ungroup() %>%
+  drop_na() %>%
+  features(Ozone, list(unitroot_kpss, ~ unitroot_kpss(., lags = 24), adf, unitroot_ndiffs, ~ unitroot_nsdiffs(., .period = 24))) %>%
+  knitr::kable(format = "latex", caption = "Unitroot test statistics (diff 24 w BoxCox(Ozone))", booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+```{r statiorarytestsdiff, include=TRUE, eval=FALSE}
+qualityAR03 %>%
+  group_by(Location) %>%
+  mutate(Ozone = difference(box_cox(Ozone, lambda_guerrero))) %>%
+  ungroup() %>%
+  drop_na(Ozone) %>%
+  features(Ozone, list(unitroot_kpss, adf, unitroot_ndiffs, ~ unitroot_nsdiffs(., .period = 24))) %>%
+  knitr::kable(format = "latex", caption = "Unitroot test statistics (diff w BoxCox(Ozone))", booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+### Identify the seasonal model {-}
+
+This step is done by analyzing the seasonal coefficients of the ACF and PACF. Almost always, it will be necessary to examine differenced data when we have seasonality, because it causes the series to be nonstationary in the average values may be different within the seasonal span. For instance, average values will be  higher or lower depending on the hour of the day. 
+
+Seasonality will show in the ACF by slowly decaying at multiples of S (seasonal period). It declines faster if it can be approximated by SAR and SMA without seasonal differencing. If there is a strong and consistent seasonal pattern, then seasonal differencing should be used. Over differencing cause an increase in the variance and at most one order of seasonal differencing should be used.
+
+It is essential that we are in a Gaussian time series framework, without this requirement the ACF does not give insight into the dependence structure of the process. In practical applications, ACF and PACF are actually the sample ACF, and sample PACF, not the population ACF, and PACF.
+
+By inspection of the sample ACF, peaks at regular 24 lags appear, corresponding to a seasonal component, that must be removed. After applying seasonal difference at lag 24, ACF and PACF should be checked at the seasonal lags, to identify SAR and SMA polinomial orders, using looking for known patterns of these types of components presented in \ref{tab:acfrules}.
+
+### Regular order selection {-}
+
+After removing all seasonal componentes the non-seasonal components order selection is done again by looking at the ACF and PACF behavior over the first few lags (less than S period) to assess what terms might be present.
+
+With seasonal data, it is likely that short run non-seasonal components will still interact around the seasonal lags.
+Regular component can be identified by exploring the ACF and PACF of the residuals of the seasonal model, and follow a forward stepwise approach, adding terms of one kind or the other (AR or MA) as indicated by the appearance of the ACF and PACF plots.
+
+In practice, low order processes usually suffice. Search space deﬁnition for SARIMA model development was guided by preliminary order estimation described.
+
+### Check the significance of the coefficients {-}
+
+After selecting candidate models the coefficients must be estimated. For a Gaussian ARMA(p, q) model the maximum likelihood estimation (MLE) is used to estimate the parameters. If there are coefficients that are not relevant, an can be estimated zero, statistical tests are used to validate.
+
+The model should be causal and invertible (roots of $\Psi_p(z)$ and $\theta_q(z)$ lie outside the unit circle). Estimation by software packages always produces causal and invertible models, although sometimes numerical instable.
+
+### Residuals analysis {-}
+
+After coefficient estimation, we have to assess model adequacy by checking whether the grounding assumptions are satisfied, by diagnostic tests of standardized residuals.
+
+If the model fits well, the residuals are a i.i.d. sequence of: Normal distribution; constant variance (homoscedasticity) and no autocorrelations. The ACF of the residuals can be checked to see if there are any significant values or patterns.
+
+The Ljung-Box tests the randomness of a series, $H_0$: series is uncorrelated, and $H_1$: not $H_0$. The test is applied to the residuals between t and t-h (h > 1) lags, h=1 meaning to test the correlation between each consecutive lags. If the series is indeed WN the test decision will be the same disregarding h (is uncorrelated lags = 1, 2, 3, etc).
+
+And a complement inspection if the residuals are normal distributed thou the Q-Q Plot, to assert that the remainder is in fact Gaussian White Noise. If a transformation has been used in the model, as in the present case, we should look at the residuals on the transformed scale (called innovation residuals).
+
+### Compare different models {-}
+
+The goodness-of-fit are measures of the quality of the model, that take into account the discrepancies between the values observed and those predicted. Because the ACF and PACF analysis is not definitive for model selection, it is reasonable to search variations of the initial guess to look for improvements and better performance.
+
+Three measures are tipicaly used, AIC, AICc and BIC. The best model is the one with mininum AIC value, the other measures penalize more the number of parameters in the model, and can select more parsimonious models.
+
+* Akaike’s Information Criterion
+
+\begin{equation}
+    \text{AIC} = -2 \log(L) + 2k
+  \label{eqn:AIC}
+\end{equation}
+
+where $L$ is the likelihood of the model and $k$ is the total number of parameters.
+
+* Corrected AIC
+
+\begin{equation}
+  \text{AIC}_{\text{c}} = \text{AIC} + \frac{2k(k+1)}{T-k-1}
+  \label{eqn:AICc}
+\end{equation}
+
+* Bayesian Information Criterion
+
+\begin{equation}
+  \text{BIC} = \text{AIC} + k[\log(T)-2]
+  \label{eqn:BIC}
+\end{equation}
+
+### Forecast {-}
+
+With the best model defined we can proceed to forecasting. Forecasting is done by sampling the model and obtaining point estimates, the forecast value will be the average of the point estimates at each lag, accompanied by a confidence interval. For obtaing multiperiod ahead forecasts the one-period ahead forecast if iterated forward for the desired number of periods.
+
+In practice when a normal distribution for the residuals is an unreasonable assumption bootstrapping can be used, innovations are drawn from estimated values of the model (so long residuals are uncorrelated with constant variance). This is an approximation that works well, but eventually differences between the true process and the model will apear.

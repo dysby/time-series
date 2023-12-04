@@ -1,0 +1,84 @@
+---
+title: "A1-Introduction"
+author: "helder"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+# SARIMA
+
+The $SARIMA (p, d, q) \times (P, D, Q)_S$ model [@scotto2022], (Seasonal Autoregressive Integrated Moving Average), is a parametric approach for modeling a time series. It is defined by eq \ref{eqn:sarima}. This model takes into account several general properties of time series. First deals with non-stationarity by applying differencing operations either at seasonal components (D parameter) and/or at the regular components (d parameter). The resulting stationary time series is then composed in auto-regressive (p and P parameters) and moving-average components (q and Q parameters). 
+
+\begin{equation}
+  \begin{aligned}
+    X_t & = \nabla^d \nabla_S^D Y_t \equiv (1-B)^d (1-B^S)^D Y_t \\ 
+    \Psi_p(B) \Phi_P(B^S) X_t & = \theta_q(B) \Theta_Q(B^S) Z_t
+  \end{aligned}
+  \label{eqn:sarima}
+\end{equation}
+
+where, 
+
+* $X_t$ - a causal ARMA process.
+* $B$ - lag operator, i.e., for all $t > 1, BY_t = Y_{t-1}$.
+* $\nabla^d Y_t$ - is a difference operation of order $d$ and/or $D$ for seasonal component. $\nabla Y_t = Y_t - Y_{t-1}$ and $\nabla_S^{D=1} Y_t = Y_t - Y_{t-S}$, where \(S=\) the number of seasons.
+* $\Psi_p(B)$ - autoregressive polynomial of order $p$
+* $\Phi_P(B^S)$ - autoregressive polynomial of order $P$, for the seasonal component
+* $\theta_q(B)$ - moving average polynomial of order $q$
+* $\Theta_Q(B^S)$ - moving average polynomial of order $Q$, for the seasonal component
+* $Z_t$ - is White Noise, uncorrelated Gaussian random variables ($\sim \mathcal{N}(0,\sigma_Z^{2})$)
+
+This model can have any combination of parameters applied to the regular (p, d, q) and seasonal (P, D, Q) components.
+
+In practice it can be quite difficult to manually select a model that will perform well at forecasting a dataset. One aproach is to use the Box & Jenkins methodology to find the best model for forecasting, building on series mathematical and statistical properties.
+
+This methodology consists of three iterative stages:
+
+* Identification and selection of the models: the series is checked for stationarity and the appropriate corrections are made for non-stationary cases, by differencing the series d times in its own frequency and D times in the seasonal frequency. The orders of the polynomials $\phi$, $\Phi$, $\theta$, and $\Theta$, are identified using the autocorrelation function (ACF) and partial autocorrelation function (PACF) of the series.
+* Estimation of parameters using Maximum Likelihood.
+* Diagnostics to assert compliance:
+  * The residuals of the estimated model approach the behavior of the white noise.
+  * The model should be stationary and invertible.
+  * The coefficients of the model should be statistically significant and have a low autocorrelation.
+  * The coefficients of the model should be able to represent the series by themselves.
+  * The adjustment degree should be high as compared to that of other alternative models.
+
+A time series ${X_t}$ has mean function $\mu_t = E[X_t]$ and autocovariance function:
+\begin{align}
+  \gamma_X(t+h, t) & = \text{Cov}(X_{t + h}, X_t) \nonumber \\
+                   & = E[(X_{t + h} - \mu_{t + h})( X_t - \mu_t)]
+  \label{eqn:autocovariance}
+\end{align}
+
+It is stationary if both are independent of t.
+
+The ACF (auto correlation function) is defined as the correlation of a series with a lagged copy of itself as a function of lags. Formally, 
+
+\begin{equation}
+  \rho_X(h) = \frac{\gamma_X(h)}{\gamma_X(0)}
+  \label{eqn:rho}
+\end{equation}
+
+And the PACF (partial autocorrelation function) gives the correlation of a series with its own lagged values, but conditioning to all lower lags,
+
+\begin{align}
+  \phi_{11} & = \rho(1) \\
+  \phi_h  & = Corr (X_h - X_h^{h - 1}, X_0 - X_0^{h - 1}) for h = 2, 3, \dots
+  \label{eqn:PACF}
+\end{align}
+
+The ACF provides information of the order of dependence when the process is a moving average. In turn the PACF provides information of the order of dependence when the process is a autoregressive. These functions are used to find the q and p orders of the models, p order is the lag beyond which the PACF becomes zero, q is the order of the cut in the ACF. Seasonal polynomial orders, P and Q, are identified in a similar way, but by inspecting peaks at fixed intervals (corresponding to the period). 
+
+\begin{table}[h]
+  \caption{\label{tab:acfrules}ACF and PACF known patterns of models}
+  \centering
+  \begin{tabular}{l|l|l|}
+    Model & ACF & PACF \\
+    \hline
+    AR(p) & decays & zero for $h > p$ \\
+    \hline
+    MA(q) & zero for $h > q$ & decays \\
+    \hline
+    ARMA(p,q) & decays & decays \\
+  \end{tabular}
+\end{table}

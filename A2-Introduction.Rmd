@@ -1,0 +1,133 @@
+---
+title: "A2-Introduction"
+author: "helder"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+# Non linear models {-}
+
+In many practical applications Gaussian linear models are not appropriate to model the dependency structure of the data motivating the use of other families of models, namely non-linear models.
+
+The GARCH family models are useful in time series modeling dealing with heteroscedasticity (non-stationary variance). One of major applications is financial data such as in modeling stock returns volatility.
+
+Heteroscedaciticy can be thought as: 
+  the time dependence variance, also called volatility; 
+  and the observed present;
+being dependent/conditional to recent past values.
+
+This framework belongs to the class of parametric models for the conditional variance and takes dependence of the innovations and variances of one process to estimate the variance in a multiplicative form:
+
+\begin{equation}
+  X_t = \sigma_t Z_t, \quad t \in \mathbb{Z}
+  (\#eq:multiplicative)
+\end{equation}
+
+where $(Z_t)$ forms a i.i.d. sequence of real-valued innovations with
+zero mean and unit variance, $\sigma_t$ is a stochastic process such that
+$\sigma_t$ and $Z_t$ are independent for fixed $t$. Also, strictly stationarity is assumed for $(\sigma_t)$ and $(X_t)$.
+
+This multiplicative form adapts to practical financial data, @scotto2022, since the price changes (increase and decrease) are well modeled by the sign of $Z_t$, and $\sigma_t$ provides a good description of the order of magnitude of change. And $\sigma_t^2$ represents the conditional variance of $X_t$ given $\sigma_t$.
+
+All GARCH models have this multiplicative form although may vary in the volatility process $\sigma_t$.
+
+### ARCH
+
+The first, and most simple, model is the (A)uto(R)egressive (C)onditional (H)eteroscedastic model where it is assumed that:
+
+* the returns, $X_t$, are uncorrelated, although can be dependent;
+
+* return dependencies are described by a quadratic function of past values.
+
+The model is given by:
+
+\begin{equation}
+  \begin{aligned}
+    X_t & = \sigma_t Z_t \\
+    \sigma_t^2 & = a_0 + a_1 X_{t-1}^2 + \ldots + a_p X_{t-p}
+  \end{aligned}
+  (\#eq:arch)
+\end{equation}
+
+where $(Z_t)$ forms a i.i.d. sequence of random variables with zero mean and unit variance, $a_0>0$ and $a_i \ge 0$ for $i>0$. 
+
+In the model structure a quadratic dependency of past values $X_{t-1},\ldots,X_{t-p}$ emerges, leading to increased conditional variance and increased return values $X_t$. The series will follow a behavior characterized by high values succeeded by high values, due to the quadratic dependency. One trait that does not happen in real time series is that the effect of positive or negative values lead to the same behavior.
+
+A time series exhibiting conditional heteroscedasticity - or autocorrelation in the squared series - is said to have autoregressive conditional heteroscedastic (ARCH) effects.
+
+This first model have weaknesses: because it assumes that positive and negative shocks have the same effects (square dependency), and financial time series are empirical known to responds differently to positive and negative shocks; is restrictive, because the arch parameter $a_1$ must be within [0, 1/3] so that the series have a finite fourth moment; are likely to over predict the volatility because of slow response to large isolated shocks; also this model often requires many parameters describe the evolution of volatility.
+
+### GARCH
+
+The (G)eneralized (A)uto(R)egressive (C)onditional (H)eteroscedastic model, GARCH(p,q), are a generalization of ARCH, building on modeling the volatility $(\sigma^2)$ as dependent to not only past values $(X_t^2)$ but also on its own lags $(\sigma_{t-h}^2)$. The model have the form:
+
+\begin{equation}
+  \begin{aligned}
+    X_t & = \sigma_t Z_t \\
+    \sigma_t^2 & = a_0 + \sum_{i=1}^{p} a_i X_{t-i}^2 + \sum_{j=1}^{q} b_j \sigma_{t-j}^2
+  \end{aligned}
+  (\#eq:garch)
+\end{equation}
+
+where $a_0 > 0, \quad a_1,\ldots,a_{p-1} \ge 0,\quad a_p > 0, \quad  b_0 > 0,\quad b_1,\ldots,b_{q-1} \ge 0,\quad b_p > 0$.
+
+In financial data is common to observe volatility clustering, and GARCH models can capture that behavior.
+
+### IGARCH
+
+In the IGARCH(p, q) model, shocks to the conditional variance persist indefinitely, meaning that the shocks remain important for all lags. This can be tested if the GARCH(1, 1) model fit results in the sum of a + b parameters being close to 1. The unconditional variance of $X_t$ is infinite, so neither $X_t$ and $X_t^2$ satisfies the definition of a covariance-stationary process.
+
+### GARCH-M
+
+In finance, @tsay05, the return of a security may depend on its volatility. This model, where "M" stands for GARCH in the mean, was derived to have a heteroscedasticy term in the mean equation. The $\delta$ parameter is called the risk premium parameter. Particularly, in a GARCH(1,1)-M if the $\delta$ parameter is positive the return is positively related to past volatility. These serial correlations are introduced by those in the volatility process $\sigma_t^2$.
+
+\begin{equation}
+  \begin{aligned}
+    Y_t & = u + \delta\sigma_t^2 + X_t, \\
+    \sigma_t^2 & = a_0 + \sum_{i=1}^{p} a_i X_{t-i}^2 + \sum_{j=1}^{q} b_j \sigma_{t-j}^2
+  \end{aligned}
+  (\#eq:garchm)
+\end{equation}
+
+### FIGARCH
+
+The extension to long-memory models in volatility is motivated by the fact that the autocorrelation function of the squared or absolute-valued series can decay slowly (even thought the series has no autocorrelation).
+
+GARCH model shocks that decay at an exponential rate, and IGARCH model shocks that persist, the FIGARCH model shocks that decay at a slower rate, by introducing a difference parameter (not integer).
+
+### APARCH
+
+It is common that financial series show a leverage effect. Leverage is a trait of asymmetric volatility, were large values have different influencing effects depending if are positive or negative. For example volatility may rise higher in response to negative shocks as opposed to positive shocks. Previous models of the GARCH family are unable to model this characteristic, since the volatility have a quadratic dependency of past values. 
+
+The (A)symectric (P)ower ARCH models deal with the leverage effect by introducing new parameters in the volatility as:
+
+\begin{equation}
+    \sigma_t^\delta = a_0 + \sum_{i=1}^{p} a_i( |X_{t-i}| - \gamma_i X_{t-1})^\delta + \sum_{j=1}^{q} b_j \sigma_{t-j}^2
+  (\#eq:aparch)
+\end{equation}
+
+where $\delta > 0$ (power term) and $-1 < \gamma_j < 1, \quad j=1,\ldots,p$ (leverage parameter). If $\gamma_j > 0$, negative shocks have stronger impact on volatility than positive shocks.
+
+These models have great flexibility, and the representation can include others like ARCH and GARCH.
+
+### Building the model
+
+One can follow a simple step procedure to build the model:
+
+1. building an econometric model (e.g., an ARMA model) for the series to remove any linear dependence.
+
+2. use the residuals of the mean model to test for ARCH effects.
+
+3. specify ARCH model and estimate coefficients.
+
+4. diagnose the fitted model and refine if necessary.
+
+For most series, the serial correlations are weak. Thus, the mean model by result in only removing the sample mean from the data if it is significantly different from zero. Or even a simple AR model might be needed.
+
+The ARCH effect can be checked by looking at the ACF of the squared series (after removing mean), if the first m lags are zero.
+
+For estimating the parameters, a distribution of the innovations must be specified, and commonly the Normal distribution is a candidate, but also the Student’s t-distribution is generically used. Student's t-distribution can lead to better results because the  because the innovations seem generally to be heavier-tailed than the Normal.
+
+The diagnostics may include computing the skewness, kurtosis, and inspecting quantile-to-quantile plot (i.e., QQ-plot) of standardized residuals, to check the validity of the distribution assumption. Also the sample ACF of the standardized residuals, their squared series, and absolute series, to check any correlations or persisting ARCH effects.
+
+All computations were done in R with the rugarch package [@Ghalanos2020].

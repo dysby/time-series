@@ -1,0 +1,164 @@
+---
+title: "A2-GALP"
+author: "helder"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+## GALP {-}
+
+In this log returns, and squared, series, the samples ACF and PACF have no significant correlations, in figure \@ref(fig:galp-acf-pacf). Questioning again the existence of ARCH effect. Ljung-Box test, in table \@ref(tab:galp-ljung-box-test) indicate significant autocorrelations are different from zero, this was not supported by sample ACF and PACF. ARCH-LM test in table \@ref(tab:galp-arch-test) do not indicate clear evidence of ARCH effect, p-values would be small.
+
+ARCH1, and ARCH2 where not selected for the set of model candidates. In fact preliminary analysis showed this models do not converge for GALP series. In the table \@ref(tab:galp-fits) goodness of fit summary the best model is GARCH(1,1) with t-distributed innovations. Higher order GARCH do not lead to better measures, and GARCH(1,1) is a very flexible model.
+There is no evidence of non-stationarity for selecting considering IGARCH model. One value that is very interesting is that there is a high difference in goodness of fit measures between GARCH with Normal distribution vs GARCH with t-distribution, the later lead to much better values, meaning that one can suspect the series to have extreme values more often than "normal".
+
+The model GARCH(1,1) coefficients are resumed in the table \@ref(tab:galp-model-coef-tab). For GALP series the mean (mu) and omega are estimated zero. All other coefficients are significant, alpha1 is lesser than beta1, there is more correlation to past volatility values than to observed past value. The crucial condition $\sum a + b < 1$ for a mean reverting process is met (it is stable, does not explode to infinitly high values). The shape parameter of the t-distribution is significant, confirming its use.
+
+The standardized residuals plots in figure \@ref(fig:galp-residual-plots) show more deviating patterns in the tails, for GARCH with normal distribution vs GARCH with t-distributiuon, than those observed in the EDP fitted models. GALP series have more extreme values that EDP series.
+
+The Ljung–Box and The LM Arch tests \ref{galp-diag}, all lead to conclude no correlation and no ARCH effect in the residuals. The Jarque-Bera test also conclude the residuals are normally distributed.
+
+The diagnostics on the model GARCH(1, 1) with t-distribution conclude the model is suitable and can be used to forecast the volatility, as figure \@ref(fig:galp-forecast-plots). In the volatility plot is evidence of the persistence/clustering, the high value is sustained for some periods.
+
+```{r}
+NAME <- "GALP"
+s <- log_returnGALP
+```
+
+```{r galp-acf-pacf, fig.pos="!h", out.extra = "", fig.cap=paste(NAME, "Log Returns"), fig.dim=c(6, 4), include=TRUE}
+p1 <- as_tsibble(s) %>% ACF() %>% autoplot() + ylim(c(-0.10, 1)) + ggtitle("log returns")
+p2 <- as_tsibble(s) %>% PACF() %>% autoplot() + ylim(c(-0.10, 1))
+p3 <- as_tsibble(s^2) %>% ACF() %>% autoplot() + ylim(c(-0.10, 1)) + ggtitle("log returns ^2")
+p4 <- as_tsibble(s^2) %>% PACF() %>% autoplot() + ylim(c(-0.10, 1))
+(p1 + p2) / (p3 + p4)
+```
+
+```{r galp-arch-test}
+kbl(do_arch_test(s),
+      caption = paste(NAME, "- ARCH LM test"),
+      booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+```{r galp-ljung-box-test}
+kbl(tidy(Box.test(coredata(s^2), type="Ljung-Box", lag = 12)),
+      caption = paste(NAME, "- Ljung-Box test"),
+      booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+
+```{r galp-fits, include=TRUE}
+arma.order <- c(0,0)
+
+arch.order <-  1:2
+arch.names <-  paste("arch", arch.order, sep="")
+fit.list <-  list()
+# for (p in arch.order) {
+#   arch.spec <-  ugarchspec(variance.model = list(garchOrder=c(p,0)),
+#                           mean.model = list(armaOrder=arma.order))
+#   fit.list[[p]] <- ugarchfit(spec=arch.spec, data=s)
+# }
+# names(fit.list) <-  arch.names
+
+garch11.spec <-  ugarchspec(variance.model=list(garchOrder=c(1,1)),
+                          mean.model = list(armaOrder=arma.order))
+fit.list$garch11 <- ugarchfit(spec=garch11.spec, data=s)
+
+garch11_std.spec <-  ugarchspec(variance.model=list(garchOrder=c(1,1)),
+                          mean.model = list(armaOrder=arma.order), distribution.model="std")
+fit.list$garch11_std <- ugarchfit(spec=garch11_std.spec, data=s)
+
+garch22_std.spec <-  ugarchspec(variance.model=list(garchOrder=c(2,2)),
+                              mean.model = list(armaOrder=arma.order), distribution.model="std")
+
+fit.list$garch22_std <- ugarchfit(spec=garch22_std.spec, data=s)
+
+igarch11_std.spec <-  ugarchspec(variance.model=list(model="iGARCH", garchOrder=c(1,1)),
+                             mean.model = list(armaOrder=arma.order, include.mean=TRUE),
+                             distribution.model="std")
+
+fit.list$igarch11_std <- ugarchfit(spec=igarch11_std.spec, data=s)
+
+garch_m_11_std.spec  <-  ugarchspec(variance.model = list(model="sGARCH", garchOrder=c(1,1)),
+                                mean.model = list(armaOrder=arma.order, 
+                                                  include.mean=TRUE, archm=TRUE, archpow = 2),
+                                distribution.model="std")
+fit.list$garch_m_11_std <- ugarchfit(spec=garch_m_11_std.spec, data=s)
+
+aparch11_std.spec = ugarchspec(variance.model = list(model="apARCH", garchOrder=c(1,1)),
+                                mean.model = list(armaOrder=arma.order, include.mean=TRUE),
+                                distribution.model="std")
+
+fit.list$aparch11_std <- ugarchfit(spec=aparch11_std.spec, data=s)
+info.mat <- sapply(fit.list, infocriteria)
+rownames(info.mat) <-  rownames(infocriteria(fit.list[[1]]))
+
+kbl(info.mat[1:2,],
+      caption = paste(NAME, "- Models goodness of fit (AIC; BIC)"),
+      booktabs = T) %>%
+  kable_styling(latex_options = c("hold_position","scale_down"))
+```
+
+```{r galp-model-coef-tab}
+#arch.list$arch1@fit$matcoef
+#arch.list$garch11@fit$matcoef
+kbl(round(fit.list$garch11_std@fit$matcoef, 4),
+      caption = paste(NAME, "- Model coefficients"),
+      booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+
+```{r, eval=FALSE}
+show(fit.list$garch11_std)
+```
+
+
+Model diagnostics \label{galp-diag}:
+\singlespacing
+\begin{verbatim}
+GARCH Model : sGARCH(1,1)   Mean Model : ARFIMA(0,0,0)    Distribution : std
+
+Weighted Ljung-Box Test on Standardized Residuals
+                        statistic p-value 
+Lag[1]                     0.1056  0.7452
+Lag[2*(p+q)+(p+q)-1][2]    0.2510  0.8236
+Lag[4*(p+q)+(p+q)-1][5]    0.9594  0.8688
+d.o.f=0        H0 : No serial correlation
+Weighted Ljung-Box Test on Standardized Squared Residuals
+                        statistic p-value 
+Lag[1]                      1.734  0.1880 
+Lag[2*(p+q)+(p+q)-1][5]     2.348  0.5388
+Lag[4*(p+q)+(p+q)-1][9]     3.817  0.6200
+d.o.f=2
+Weighted ARCH LM Tests
+            Statistic Shape Scale P-Value
+ARCH Lag[3]    0.0495 0.500 2.000  0.8239
+ARCH Lag[5]    1.0089 1.440 1.667  0.7303
+ARCH Lag[7]    1.9774 2.315 1.543  0.7221
+
+```{r ,results='asis'}
+jb <- rugarch::BerkowitzTest(residuals(fit.list$garch11_std, standardize=TRUE))[10:11]
+print(paste("Jarque-Bera Test of Normality Statistic:", round(jb$JB, 4), " p-value =", round(jb$JBp, 4) ))
+```
+\end{verbatim}
+\onehalfspacing
+
+
+```{r galp-residual-plots, fig.pos="!h", out.extra = "", fig.cap=paste(NAME, "GARCH Model Standardized Residuals"), fig.dim=c(6, 5), include=TRUE}
+par(mfrow = c(2, 2))
+plot(fit.list$garch11, which=8) #8:   Empirical Density of Standardized Residuals
+plot(fit.list$garch11_std, which=8) #8:   Empirical Density of Standardized Residuals
+plot(fit.list$garch11, which=9) #9:   QQ-Plot of Standardized Residuals
+plot(fit.list$garch11_std, which=9) #9:   QQ-Plot of Standardized Residuals
+```
+
+
+```{r galp-forecast-plots, fig.pos="!h", out.extra = "", fig.cap=paste(NAME, "GARCH Forecasts"), fig.dim=c(6, 3), include=TRUE}
+par(mfrow = c(1, 2))
+garchforecast1 <- ugarchforecast(fit.list$garch11_std, data=s, n.ahead = 5)
+plot(garchforecast1, which=1) #1:   Time Series Prediction (unconditional)
+plot(garchforecast1, which=3) #3:   Sigma Prediction (unconditional)
+```
+

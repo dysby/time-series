@@ -1,0 +1,193 @@
+---
+title: "Sobreiras-Porto"
+author: "helder"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+## Sobreiras-Porto {-}
+
+```{r , include=FALSE}
+y <- qualityAR03 %>% filter(Location=="Sobreiras-Porto")
+```
+
+```{r, echo=FALSE, include=FALSE}
+lambda <- y %>%
+  features(Ozone, features = guerrero) %>%
+  pull(lambda_guerrero)
+#caption_tex = paste0("Difference h=24 Box-Cox Transformation $\\lambda$ = ", round(lambda,2))
+```
+
+The Sobreiras-Porto series plot is presented in like figure \@ref(fig:sob-ts). As with other series a Box-Cox transformation was applied to stabilize the variance and a seasonal difference used be considered to remove seasonality.
+
+Unit root tests as resumed in table \ref{tab:sob-esth-stationary} are inconsistent with the decision to differenciate in seasonal lag.
+
+```{r sob-ts, fig.pos="!h", out.extra = "", fig.cap=paste(y$Location[1], " - Time series"), fig.dim=c(7, 3), include=TRUE}
+y %>% gg_tsdisplay(Ozone, plot_type = "partial", lag_max = 200)
+```
+
+```{r sob-esth-stationary, include=TRUE}
+adf <- function(x, ...) {
+  out <- tseries::adf.test(x, k = 1)
+  c(adf_stat = unname(out$statistic), adf_pvalue = out$p.value)
+}
+# tseries::adf.test(box_cox(y$Ozone, lambda), k=1)
+kbl(y %>%
+      mutate(Ozone = box_cox(Ozone, lambda)) %>%
+      features(Ozone, 
+               list(unitroot_kpss, adf, unitroot_ndiffs, ~ unitroot_nsdiffs(., .period = 24))),
+    caption = paste(y$Location[1], " - Unit root tests and suggested number of differences"),
+    booktabs = T) %>% 
+  kable_styling(latex_options = "hold_position")
+```
+
+
+The seasonal difference series (h=24) in figure \@ref(fig:sob-diffplot), have only one significant correlation at lag 24, in the ACF, meaning that an SMA(1) component. Regarding the PACF in the first lags only 2 are significant so an AR(2) component will be considered. The final predicted model is of the form SARIMA(2,0,0)(0,1,1)[24]. 
+
+
+```{r sob-diffplot, fig.pos="!h", out.extra = "", fig.cap=paste(y$Location[1], " - Difference h=24 Box-Cox Transformation $\\lambda$ = ", round(lambda,2)), fig.dim=c(7, 4), include=TRUE}
+y %>%
+  gg_tsdisplay(difference(box_cox(Ozone, lambda), lag = 24), plot_type = "partial", lag_max = 200) +
+  labs(y = "")
+```
+
+```{r , include=FALSE}
+fits <- readRDS("models/sobreiras-porto_fit_s011.rds")
+fit <- fits %>% select(Location, sarima101011)
+```
+
+The predicted model result in correlated residuals, other variations where considered as resumed in table \@ref(tab:sob-model-comparison). 
+The model `r format(fit %>% pull(2))` pass the diagnostic tests of non-correlated residuals, as the model <ARIMA(3,0,0)(0,1,1)[24]>. The former was chosen because the regular orders are equal to some other locations.
+
+All diagnostics plots are in figure \@ref(fig:sob-fit-resid-plot). This model also have residuals that are not of normal distribution. 
+
+```{r, include=FALSE}
+plot.box.ljung <- function (
+    z, k = 10, main = "Ljung-Box test (k)", ylab = "p-value"
+) {
+  p <- rep(NA, k)
+
+  for (i in 1:k) {
+    p[i] <- Box.test(z, i, type = "Ljung-Box")$p.value
+  }
+
+  ggplot(as_tibble(p), aes(x=1:k, y=p)) +
+    geom_bar(stat='identity', width =0.05) +
+    geom_point() + ylim(0,1) + ylab(ylab) +
+    geom_abline(intercept = .05, slope = 0, lty = 3) +
+    ggtitle(main)
+}
+
+fit_diag_plots <- function(fit) {
+  m <- fit %>% augment() %>% mutate( .innov = scale(.innov) )
+
+  p1 <- m %>% autoplot(.innov)
+  p2 <- m %>% ACF(.innov, lag_max = 100) %>% autoplot() + ylim(-0.1, 0.2)
+  p3 <- m %>% PACF(.innov, lag_max = 100) %>% autoplot() + ylim(-0.1, 0.2)
+  p4 <- m %>%  gghistogram(x=".innov", bins = 150)
+  p5 <- plot.box.ljung(m %>% pull(.innov), k=10)
+  p6 <- ggqqplot(m,".innov", title = "QQ plot")
+  p7 <- ggplot(m, aes(x = .fitted, y = .innov)) +
+          geom_point()
+  
+  (p1) / (p2 + p3) / (p4 + p5) / (p6 + p7)
+}
+
+```
+
+```{r sob-fit-resid-plot, fig.pos="H", out.extra = "", fig.cap=paste(y$Location[1], format(fit %>% pull(2)), "standardized residuals diagnostic plots"), fig.dim=c(7, 8), include=TRUE}
+fit_diag_plots(fit)
+```
+
+```{r sob-model-comparison, include=TRUE}
+kbl(fits %>% 
+      pivot_longer(!Location, names_to = "Model name",
+                     values_to = "Orders") %>%
+      mutate("Model" = format(Orders)) %>%
+      glance() %>%
+      select(Location, Model, AIC, AICc, BIC),
+    format = "latex", 
+    caption = paste(y$Location[1], "model comparison"), 
+    booktabs = T) %>% 
+  kable_styling(latex_options = "hold_position")
+```
+
+
+```{r, include=FALSE, eval=FALSE}
+fit <- fits %>% select(Location, sarima201012)
+```
+
+```{r sob-fit-resid-plot0, fig.pos="H", out.extra = "", fig.cap=paste(y$Location[1], format(fit %>% pull(2)), "standardized residuals diagnostic plots"), fig.dim=c(7, 8), include=TRUE, eval=FALSE}
+fit_diag_plots(fit)
+```
+
+The coefficients are statistical significant, as resumed in table \@ref(tab:sob-coef), all p-values of the t-test (H0: coefficient is zero) lead to rejecting the null hypothesis.
+
+```{r sob-coef, include=TRUE}
+kbl(fit %>% coef(), 
+    format = "latex", 
+    caption = paste(y$Location[1], format(fit %>% pull(2)), "Coefficient statistics"), 
+    booktabs = T) %>% 
+  kable_styling(latex_options = "hold_position")
+```
+
+Model forecasts were obtained in the table \@ref(tab:sob-forecast-tab), and figure \@ref(fig:sob-forecast-plot). 
+
+This crossvalidation (horizon=5) example shows that the forecasts produce higher peaks than the series sample path. It shows also have more variability and cannot replicate clearly some sustained high values, this is expected because of w.n., does not produce patterns like noisy square waves (sustained values far from the mean).
+
+```{r sob-forecast-tab, include=TRUE}
+f <- fit %>% forecast(h=5)
+
+kbl(f %>%  hilo(level = c(95)) %>% select(-c(1,2)),
+             caption = paste(y$Location[1], format(fit %>% pull(2)), "forecast 5 periods ahead (95\\% CI)"),
+             booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+```{r sob-forecast-plot, fig.pos="!h", out.extra = "", fig.cap=paste(y$Location[1], format(fit %>% pull(2)), "forecasts"), fig.dim=c(6, 2), include=TRUE}
+f %>% 
+  autoplot(y %>%
+              filter(between(index,as_datetime("2020-12-15"), as_datetime("2021-01-01"))),
+            level = 95,
+            alpha = 0.5)
+```
+
+```{r sob-cv, include=FALSE}
+# training <- y %>% filter(month(index) <= 11)
+# test <- y %>% filter(month(index) > 11)
+# 
+# train_fit <- training %>%
+#   model(
+#     sarimacv = ARIMA(box_cox(Ozone, lambda) ~ 0 + pdq(1, 0, 1) + PDQ(0, 1, 1, period=24))
+#   )
+# 
+# test_refit <- train_fit %>% refit(test)
+# 
+# fits5 <- test_refit %>% fitted(h = 5)
+# saveRDS(fits5, file = "models/sobreiras-porto_cv_fits5.rds")
+# saveRDS(test_refit, file = "models/sobreiras-porto_cv_test_refit.rds")
+
+# Load
+test_refit <- readRDS("models/sobreiras-porto_cv_test_refit.rds")
+fits5 <- readRDS("models/sobreiras-porto_cv_fits5.rds")
+#fits1 <- test_refit %>% fitted(h = 1)
+```
+
+```{r sob-cv-accuracy-tab}
+kbl(bind_rows(
+      fit %>% accuracy() %>% select(RMSE, MAE),
+      test_refit %>% accuracy() %>% select(RMSE, MAE)
+      ) %>% 
+      add_column(Type = c("Series", "CV")) %>% 
+      select(3, 1, 2),
+    caption = paste(y$Location[1], format(fit %>% pull(2)), "Series and Crossvalidation Accuracy"),
+    booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+```{r sob-cv-plot, fig.pos="!h", out.extra = "", fig.cap=paste(y$Location[1], format(test_refit %>% pull(2)), "crossvalidation forecasts"), fig.dim=c(6, 2), include=TRUE}
+test %>%
+  autoplot(Ozone) +
+  autolayer(fits5, .fitted, col = "#D55E00")
+```
+

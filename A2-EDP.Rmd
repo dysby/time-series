@@ -1,0 +1,181 @@
+---
+title: "A2-EDP"
+author: "helder"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+## EDP {-}
+
+The ACF and PACF of the log returns series, in figure \@ref(fig:edp-acf-pacf) confirm that it is stationary and have no significant correlations. Looking at the squared log return series sample ACF / PACF it does not not have any significant correlations putting in check the existance of any ARCH effect.
+Applying test statistics, ARCH-LM and Ljung-Box, to search for ARCH effect and autocorrelations in series.The Ljung-Box test is significant if any group of autocorrelations (until a specefied lag) are different from zero. ARCH-LM test the existence of ARCH effect by Lagrance Multipliers.
+
+Table \@ref(tab:edp-ljung-box-test) show autocorrelation is not present util lag 12, although p-value is near usual threshold decision, autocorrelation is not supported by evidence in the ACF plot. Table \@ref(tab:edp-arch-test) indicates arch effect (small p-values lead to rejecting the null hypothesis of no ARCH effect).
+
+A set of models were selected as candidates to estimation. A summary table \@ref(tab:edp-fits) of goodness-of-fit measures AIC and BIC, is presented. ARCH(1) and ARCH(2) models did not have significant coefficient alpha1, witch was expected because no evident correlations appear in the ACF of squared series. 
+
+When AIC and BIC differ in the best model selection, BIC will favor less complex models, but AIC will be used to select the best model, because of diversity in the study. This is will be more clear when studying the models on the other series.
+The best model in goodness of fit measures is the GARCH(1,1) with t-distributed innovations.
+
+The model coefficients are resumed in the table \@ref(tab:edp-model-coef-tab). The mean (mu) omega are is estimated zero. The "a" parameter (alpha1) is non significant meaning it could be zero, again inline with the ACF plots of the squared series. This implies that the volatility is not depend on the last observed value, and would signal that we are not in an ARCH framework setting. Since the p-value of the alpha1 coefficient is close to the decision boundary and the model had the best goodness of fit, the decision is to consider it relevant (the IGARCH model had a better significance of the alpha1 parameter (estimate: 0.0403, p-value:0.0165).
+
+A large value of beta1 causes $\sigma_t$ to be highly correlated with $\sigma_{t-1}$ and gives a relatively long-term persistence, at least compared to the behavior under an ARCH model. It implies persistent volatility clustering.
+
+In figure \@ref(fig:edp-residual-plots) plots of the standardized residuals of the GARCH(1,1) and GARCH(1,1) with t-distribution. Results show a good qq plot of t-student, thus, it seems like a t-distribution is suitable for the white noise, better than the normal qq plot that have more deviations in the tails.
+The Ljung–Box tests where applied to standardized residuals and squared standardized residuals, and none of the tests have statistical evidence of non-whiteness (accept H0), which indicates that the model fits the data well. The LM Arch Test results proves no ARCH effect in the residuals.
+The Jarque-Bera test was employed to conclude the residuals are normally distributed (small p-value therefore H0 was rejected).
+
+Persistence  $P = alpha1+beta1 < 1$ of the GARCH(1, 1) model is not close to 1 so there is no evidence of a IGARCH process.
+
+The diagnostics on the model conclude the model is suitable and can be used to forecast the volatility, as figure \@ref(fig:edp-forecast-plots). In the volatility plot is evidence of the persistence/clustering, the high value is sustained for the following periods.
+
+```{r}
+NAME <- "EDP"
+s <- log_returnEDP
+```
+
+```{r edp-acf-pacf, fig.pos="!h", out.extra = "", fig.cap=paste(NAME, "Log Returns"), fig.dim=c(6, 4), include=TRUE}
+p1 <- as_tsibble(s) %>% ACF() %>% autoplot() + ylim(c(-0.10, 1)) + ggtitle("log returns")
+p2 <- as_tsibble(s) %>% PACF() %>% autoplot() + ylim(c(-0.10, 1))
+p3 <- as_tsibble(s^2) %>% ACF() %>% autoplot() + ylim(c(-0.10, 1)) + ggtitle("log returns ^2")
+p4 <- as_tsibble(s^2) %>% PACF() %>% autoplot() + ylim(c(-0.10, 1))
+(p1 + p2) / (p3 + p4)
+```
+
+```{r edp-arch-test}
+kbl(do_arch_test(s),
+      caption = paste(NAME, "- ARCH LM test"),
+      booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+```{r edp-ljung-box-test}
+kbl(tidy(Box.test(coredata(s^2), type="Ljung-Box", lag = 12)),
+      caption = paste(NAME, "- Ljung-Box test"),
+      booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+```{r edp-fits, include=TRUE}
+arma.order <- c(0,0)
+
+arch.order <-  1:2
+arch.names <-  paste("arch", arch.order, sep="")
+fit.list <-  list()
+for (p in arch.order) {
+  arch.spec <-  ugarchspec(variance.model = list(garchOrder=c(p,0)),
+                          mean.model = list(armaOrder=arma.order))
+  fit.list[[p]] <- ugarchfit(spec=arch.spec, data=s)
+}
+names(fit.list) <-  arch.names
+
+garch11.spec <-  ugarchspec(variance.model=list(garchOrder=c(1,1)),
+                          mean.model = list(armaOrder=arma.order))
+fit.list$garch11 <- ugarchfit(spec=garch11.spec, data=s)
+
+garch11_std.spec <-  ugarchspec(variance.model=list(garchOrder=c(1,1)),
+                          mean.model = list(armaOrder=arma.order), distribution.model="std")
+fit.list$garch11_std <- ugarchfit(spec=garch11_std.spec, data=s)
+
+garch22_std.spec <-  ugarchspec(variance.model=list(garchOrder=c(2,2)),
+                              mean.model = list(armaOrder=arma.order), distribution.model="std")
+
+fit.list$garch22_std <- ugarchfit(spec=garch22_std.spec, data=s)
+
+igarch11_std.spec <-  ugarchspec(variance.model=list(model="iGARCH", garchOrder=c(1,1)),
+                             mean.model = list(armaOrder=arma.order, include.mean=TRUE),
+                             distribution.model="std")
+
+fit.list$igarch11_std <- ugarchfit(spec=igarch11_std.spec, data=s)
+
+garch_m_11_std.spec  <-  ugarchspec(variance.model = list(model="sGARCH", garchOrder=c(1,1)),
+                                mean.model = list(armaOrder=arma.order, 
+                                                  include.mean=TRUE, archm=TRUE, archpow = 2),
+                                distribution.model="std")
+fit.list$garch_m_11_std <- ugarchfit(spec=garch_m_11_std.spec, data=s)
+
+aparch11_std.spec = ugarchspec(variance.model = list(model="apARCH", garchOrder=c(1,1)),
+                                mean.model = list(armaOrder=arma.order, include.mean=TRUE),
+                                distribution.model="std")
+
+fit.list$aparch11_std <- ugarchfit(spec=aparch11_std.spec, data=s)
+info.mat <- sapply(fit.list, infocriteria)
+rownames(info.mat) <-  rownames(infocriteria(fit.list[[1]]))
+
+kbl(info.mat[1:2,],
+      caption = paste(NAME, "- Models goodness of fit (AIC; BIC)"),
+      booktabs = T) %>%
+  kable_styling(latex_options = c("hold_position","scale_down"))
+```
+
+```{r edp-model-coef-tab}
+#arch.list$arch1@fit$matcoef
+#arch.list$garch11@fit$matcoef
+kbl(round(fit.list$garch11_std@fit$matcoef, 4),
+      caption = paste(NAME, "- Model coefficients"),
+      booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+Model diagnostics:
+\singlespacing
+\begin{verbatim}
+GARCH Model : sGARCH(1,1)     Mean Model : ARFIMA(0,0,0)     Distribution : std
+
+Weighted Ljung-Box Test on Standardized Residuals
+                        statistic p-value
+Lag[1]                    0.07972  0.7777
+Lag[2*(p+q)+(p+q)-1][2]   0.08390  0.9311
+Lag[4*(p+q)+(p+q)-1][5]   1.43943  0.7548
+d.o.f=0        H0 : No serial correlation
+Weighted Ljung-Box Test on Standardized Squared Residuals
+                        statistic p-value
+Lag[1]                   0.007587  0.9306
+Lag[2*(p+q)+(p+q)-1][5]  1.341317  0.7788
+Lag[4*(p+q)+(p+q)-1][9]  2.151951  0.8861
+d.o.f=2
+Weighted ARCH LM Tests
+            Statistic Shape Scale P-Value
+ARCH Lag[3]    0.6553 0.500 2.000  0.4182
+ARCH Lag[5]    1.2763 1.440 1.667  0.6531
+ARCH Lag[7]    1.6508 2.315 1.543  0.7907
+
+```{r edp-jb, results='asis'}
+jb <- rugarch::BerkowitzTest(residuals(fit.list$garch11_std, standardize=TRUE))[10:11]
+print(paste("Jarque-Bera Test of Normality Statistic:", round(jb$JB, 4), " p-value =", round(jb$JBp, 4) ))
+```
+\end{verbatim}
+\onehalfspacing
+
+```{r edp-residual-plots, fig.pos="!h", out.extra = "", fig.cap=paste(NAME, "GARCH Model Standardized Residuals"), fig.dim=c(6, 5), include=TRUE}
+par(mfrow = c(2, 2))
+plot(fit.list$garch11, which=8) #8:   Empirical Density of Standardized Residuals
+plot(fit.list$garch11_std, which=8) #8:   Empirical Density of Standardized Residuals
+plot(fit.list$garch11, which=9) #9:   QQ-Plot of Standardized Residuals
+plot(fit.list$garch11_std, which=9) #9:   QQ-Plot of Standardized Residuals
+```
+
+
+```{r edp-forecast-plots, fig.pos="!h", out.extra = "", fig.cap=paste(NAME, "APGARCH Model Residuals"), fig.dim=c(6, 3), include=TRUE}
+par(mfrow = c(1, 2))
+garchforecast1 <- ugarchforecast(fit.list$garch11_std, data=s, n.ahead = 5)
+plot(garchforecast1, which=1) #1:   Time Series Prediction (unconditional)
+plot(garchforecast1, which=3) #3:   Sigma Prediction (unconditional)
+```
+
+
+```{r, eval=FALSE}
+best_spec <- getspec(fit.list$garch11_std)
+new_fit <- ugarchfit(s, spec = best_spec, out.sample = 5) 
+f.out.5 <- ugarchforecast(new_fit, n.ahead = 5)
+
+vol.out.5 <- sigma(f.out.5)
+vol.out.5 <- ts(vol.out.5)
+vol.out.sq.5 <- vol.out.5^2
+
+act.ret.5 <- (tail(s,5))^2 ## squared actual returns
+
+forecast::accuracy(ts(vol.out.sq.5, start=505), x=act.ret.5, test=NULL, d=NULL, D=NULL)[,2:3]
+```
+
+

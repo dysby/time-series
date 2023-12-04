@@ -1,0 +1,174 @@
+---
+title: "GARCH modeling of financial time series"
+author: "Helder Jose Sousa Dias #46541"
+course: "Course: Time Series 2021/2022"
+date: "`r Sys.Date()`"
+output:
+  bookdown::pdf_book:
+    template: projectreport.tex
+    toc: no
+    number_sections: no
+    keep_tex: yes
+    fig_caption: yes
+bibliography: references.bib
+link-citations: true
+biblio-style: unsrt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE,
+	include = FALSE,
+	cache = TRUE,
+	eval.after = "fig.cap"
+	#fig.pos = "!H"
+	#fig.env="figure"
+)
+
+options(knitr.table.format = "latex") # For kable tables to write LaTeX table directly
+```
+
+```{r}
+library(latex2exp)
+library(psych)
+library(patchwork)
+library(ggpubr)
+library(fGarch)
+library(rugarch)
+library(fable)
+library(feasts)
+library(kableExtra)
+require(FinTS)
+library(tidyverse, quietly = TRUE)
+```
+
+<!-- 
+\chapter{Introduction} do not use projectreport.sty changed
+-->
+# Abstract {-}
+
+In this study non linear parametric models for the conditional variance are applied to financial timeseries. In financial analysis and modeling of returns volatility this models are widely used, and can capture most of the behaviors such as hereoscedasticity in the variance, heavy tailed effects, volatility clustering, and the leverage effect.
+Five series of Portuguese stocks where selected, leading to choices between GARCH(1,1), IGARCH(1,1) and GARCH-M(1,1) models. Some concerns does to ARCH effects not visible while inspecting the ACF of the squared log returns series, but the coefficient estimation checking and other diagnosis confirmed adequacy of the models. All results were better when a t-distribution was considered to model the white noise. Using the models for forcasting the volatility confirmed the custering effect.
+
+```{r child = 'A2-Introduction.Rmd', include=TRUE}
+```
+
+# Results & Discussion {-}
+\label{sec:results}
+
+The GARCH modeling was applied to 5 financial series of stocks of Portuguese companies (EDP, GALP, NOS, NOVABASE and MOTAENGIL), the time frame is the 2020 year of daily close values.
+
+Statistics of the log returns series are resumed in table \@ref(tab:tab-stats). 
+Some stylized facts about the log returns financial series are present, the mean is very close or equal to zero, $\sigma^2$ of order of $10^{-4}$, some skewness (asymmetric), kurtosis different from 3 (the to Normal Distribution kurtosis value). In the table excess kurtosis is reported (kurtosis - 3).
+
+```{r include=FALSE}
+load_logreturns_xls <- function(path) {
+  readxl::read_xls(path = path, skip = 3) %>%
+    select(Close) %>%
+    ts(., frequency = 1) %>%
+    log() %>%
+    diff()
+}
+
+log_returnEDP <- load_logreturns_xls("data/EDP RENOVAVEISprice.xls"); colnames(log_returnEDP) <- c('log_returnEDP')
+log_returnGALP <- load_logreturns_xls("data/GALP ENERGIA-NOMprice.xls"); colnames(log_returnGALP) <- c('log_returnGALP')
+log_returnNOS <- load_logreturns_xls("data/NOSSGPSprice.xls"); colnames(log_returnNOS) <- c('log_returnNOS')
+log_returnNOVABASE <- load_logreturns_xls("data/NOVABASESGPSprice.xls"); colnames(log_returnNOVABASE) <- c('log_returnNOVABASE')
+log_returnMOTAENGIL <- load_logreturns_xls("data/MOTA ENGILprice.xls"); colnames(log_returnMOTAENGIL) <- c('log_returnMOTAENGIL')
+
+log_returns_list <- list(log_returnEDP, log_returnGALP, log_returnNOS, log_returnNOVABASE, log_returnMOTAENGIL)
+log_returns_names <- c("EDP", "GALP", "NOS", "NOVABASE", "MOTAENGIL")
+
+series_stats <- lapply(log_returns_list,
+                       function(lg) {
+                         FinTS::FinTS.stats(lg)
+                       }
+) %>%
+  bind_rows() %>%
+  cbind(log_returns_names) %>%
+  rename("Series (log_return)" = log_returns_names) %>%
+  select(9, 2:8) %>%
+  mutate_at(vars("Mean", "Standard.Deviation", "Skewness", "Excess.Kurtosis", "Minimum", "Maximum"),
+            list(~ round(., digits = 4)))
+```
+
+```{r tab-stats, include=TRUE}
+kbl(series_stats,
+      caption = "Log Returns series summary statistics",
+      booktabs = T) %>%
+  kable_styling(latex_options = c("hold_position","scale_down"))
+```
+
+
+```{r}
+adf <- function(x, ...) {
+  out <- tseries::adf.test(x, k = 1)
+  c(adf_stat = unname(out$statistic), adf_pvalue = out$p.value)
+}
+
+do_arch_test <- function(x, max_lag = 5) {
+  do_single_arch <- function(x, used_lag)  {
+    test_out <- FinTS::ArchTest(x, lags = used_lag)
+
+    res_out <- tibble(Lag = used_lag,
+                      `LMStatistic` = test_out$statistic,
+                      `pvalue` = test_out$p.value)
+  }
+
+  tab_out <- bind_rows(map(1:max_lag, .f = do_single_arch, x = x))
+
+  return(tab_out)
+}
+```
+
+The log return series show no trend and the sample ACF / PACF (figures \@ref(fig:edp-acf-pacf), \@ref(fig:galp-acf-pacf), \@ref(fig:nos-acf-pacf), \@ref(fig:nvb-acf-pacf), \@ref(fig:mot-acf-pacf)) do not have any significant correlations. 
+
+Therefore the mean model is zero constant, for all the series. Due to some unexpected pattern in the the ACF plots of the squared series, that will be discussed later, ARIMA grid search were applied to the series, to model unforeseen correlations. The following ARIMA orders where obtained, confirming a zero constant model for the mean, and suggesting an ARMA(1,1) model for MOTAENGIL series.
+
+\singlespacing
+\begin{verbatim}
+          AR    I    MA
+EDP        0    0    0
+Galp       0    0    0
+Nos        0    0    0
+Novabase   0    0    0
+MotaEngil  1    0    1
+\end{verbatim}
+\onehalfspacing
+
+```{r child = 'A2-EDP.Rmd', include=TRUE, eval=TRUE}
+```
+
+```{r child = 'A2-GALP.Rmd', include=TRUE, eval=TRUE}
+```
+
+```{r child = 'A2-NOS.Rmd', include=TRUE, eval=TRUE}
+```
+
+```{r child = 'A2-NOVABASE.Rmd', include=TRUE, eval=TRUE}
+```
+
+```{r child = 'A2-MOTAENGIL.Rmd', include=TRUE, eval=TRUE}
+```
+
+# Conclusions {-}
+
+An initial concern was raised by the fact that, one of the stylized facts about parametric models of conditional variance that, the sample ACF of absolute or squared values are different from zero for a large number of lags, was not present in the time series (only MOTAENGIL had significant correlations in the first lags of the squared series). Statistics tests did not show evident presence of ARCH effects, unless for MOTAENGIL series.
+
+A general form IGARCH(1,1) would be selected as the best model for all the series, if considered BIC as the goodness of fit measure. But, for diversity of study and inspecting different models, AIC measure was elected to select the best model, when there was a difference between AIC and BIC selection.
+
+The use of Student's t-distribution in estimation was proved to be a better choice that selecting the Normal distribution for the innovations. All the series (5) where best modeled by using t-distribution, meaning that the series have more extreme values than those explained by Normal innovations.
+
+For EDP and GALP a GARCH(1,1) was selected. For NOS and NOVABASE a IGARCH(1,1) was the model of choice, and finally for MOTAENGIL was selected a ARMA(1,1)-GARCH-M(1,1).
+
+No APARCH model was selected as the best, implying that the series are dominated by effects other than leverage.
+
+The volatility clustering effect was observed in forecasting.
+
+# Bibliography {-}
+\setlength{\parindent}{-0.2in}
+\setlength{\leftskip}{0.2in}
+\noindent
+<div id="refs"></div>
